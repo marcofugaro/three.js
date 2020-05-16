@@ -465,6 +465,9 @@ iframe {
 
 
 .card {
+	display: flex;
+	flex-direction: column;
+	justify-content: space-between;
 	border-radius: 3px;
 	overflow: hidden;
 	background-color: #f7f7f7;
@@ -496,6 +499,23 @@ iframe {
 	font-size: 18px;
 	font-weight: 500;
 }
+
+.card .tags {
+	padding: 8px 12px 4px;
+	display: flex;
+	flex-wrap: wrap;
+}
+
+.card .tag {
+	font-weight: 500;
+	font-size: 14px;
+	margin-right: 12px;
+}
+
+.card .tag:not(:hover) {
+	color: var(--secondary-text-color) !important;
+}
+
 
 /* mobile */
 

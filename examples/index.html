@@ -165,6 +165,19 @@
 		function createLink( file ) {
 
 
+			var tagsTemplate = '';
+			if ( tags[ file ] ) {
+
+				tagsTemplate += '<div class="tags">';
+				tagsTemplate += tags[ file ].map( function ( tag ) {
+
+					return '<a class="tag" href="#">' + tag + '</a>';
+
+				} ).join( '\n' );
+				tagsTemplate += '</div>';
+
+			}
+
 			var template = [
 				'<div class="card">',
 				'	<a href="' + file + '.html" target="viewer">',
@@ -172,6 +185,7 @@
 				'			<img src="screenshots/' + file + '.png" alt="' + file + '" loading="lazy" />',
 				'		</div>',
 				'		<div class="title">' + getName( file ) + '</div>',
+				tagsTemplate,
 				'	</a>',
 				'</div>'
 			].join( "\n" );
