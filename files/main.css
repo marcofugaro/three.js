@@ -13,6 +13,7 @@
 	--border-style: 1px solid #E8E8E8;
 	--header-height: 48px;
 	--panel-width: 300px;
+	--panel-width: 50vw;
 	--panel-padding: 16px;
 	--icon-size: 20px;
 }
@@ -463,6 +464,13 @@ iframe {
 	}
 }
 
+
+
+#panel #content > div {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+	grid-gap: 16px;
+}
 
 .card {
 	display: flex;
