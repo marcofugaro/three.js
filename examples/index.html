@@ -68,18 +68,20 @@
 			for ( var key in files ) {
 
 				var section = files[ key ];
+				var sectionDiv = document.createElement( 'div' );
+				container.appendChild( sectionDiv );
 
 				var header = document.createElement( 'h2' );
 				header.textContent = key;
 				header.setAttribute( 'data-category', key );
-				container.appendChild( header );
+				sectionDiv.appendChild( header );
 
 				for ( var i = 0; i < section.length; i ++ ) {
 
 					var file = section[ i ];
 
 					var link = createLink( file );
-					container.appendChild( link );
+					sectionDiv.appendChild( link );
 
 					links[ file ] = link;
 
