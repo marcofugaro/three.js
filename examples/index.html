@@ -164,6 +164,7 @@
 
 		function createLink( file ) {
 
+			tags[ file ] =	tags[ file ] ? 	tags[ file ].concat( getTags( file ) ) : getTags( file );
 
 			var tagsTemplate = '';
 			if ( tags[ file ] ) {
@@ -295,8 +296,18 @@
 		function getName( file ) {
 
 			var name = file.split( '_' );
-			name.shift();
-			return name.join( ' / ' );
+			// name.shift();
+			// return name.join( ' / ' );
+			return name[ name.length - 1 ];
+
+		}
+
+
+		function getTags( file ) {
+
+			var name = file.split( '_' );
+			name.pop();
+			return name.filter( n => n !== 'webgl' );
 
 		}
 

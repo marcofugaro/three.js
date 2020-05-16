@@ -506,6 +506,7 @@ iframe {
 	padding: 8px 12px 8px;
 	font-size: 18px;
 	font-weight: 500;
+	text-transform: capitalize;
 }
 
 .card .tags {
@@ -517,7 +518,7 @@ iframe {
 .card .tag {
 	font-weight: 500;
 	font-size: 14px;
-	margin-right: 12px;
+	margin-right: 8px;
 }
 
 .card .tag:not(:hover) {
