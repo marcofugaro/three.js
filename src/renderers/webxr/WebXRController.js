@@ -98,7 +98,7 @@ Object.assign( WebXRController.prototype, {
 				if ( inputPose !== null ) {
 
 					targetRay.matrix.fromArray( inputPose.transform.matrix );
-					targetRay.matrix.decompose( targetRay.position, targetRay.rotation, targetRay.scale );
+					targetRay.matrix.decompose( targetRay.position, targetRay.quaternion, targetRay.scale );
 
 				}
 
@@ -111,7 +111,7 @@ Object.assign( WebXRController.prototype, {
 				if ( gripPose !== null ) {
 
 					grip.matrix.fromArray( gripPose.transform.matrix );
-					grip.matrix.decompose( grip.position, grip.rotation, grip.scale );
+					grip.matrix.decompose( grip.position, grip.quaternion, grip.scale );
 
 				}
 
