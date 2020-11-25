@@ -177,7 +177,7 @@ function WebXRManager( renderer, gl ) {
 
 	};
 
-	this.setSession = function ( value ) {
+	this.setSession = async function ( value ) {
 
 		session = value;
 
@@ -195,7 +195,7 @@ function WebXRManager( renderer, gl ) {
 
 			if ( attributes.xrCompatible !== true ) {
 
-				gl.makeXRCompatible();
+				await gl.makeXRCompatible();
 
 			}
 
