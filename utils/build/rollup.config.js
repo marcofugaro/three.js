@@ -1,4 +1,6 @@
 import babel from "@rollup/plugin-babel";
+import { nodeResolve } from '@rollup/plugin-node-resolve';
+import multi from '@rollup/plugin-multi-entry';
 import { terser } from "rollup-plugin-terser";
 
 if ( String.prototype.replaceAll === undefined ) {
@@ -304,7 +306,7 @@ const babelrc = {
 				loose: true,
 				bugfixes: true,
 			},
-		],
+		]
 	],
 	plugins: [
 		[
@@ -312,14 +314,23 @@ const babelrc = {
 			{
 				loose: true
 			}
-		]
+		],
+		// [
+		// 	"@babel/plugin-transform-runtime",
+		// 	{
+		// 		"helpers": true,
+		// 		"regenerator": true,
+		// 	}
+		// ]
 	]
 };
 
 export default [
 	{
-		input: 'src/Three.js',
+		input: [ 'regenerator-runtime', 'src/Three.js' ],
 		plugins: [
+			nodeResolve(),
+			multi(),
 			polyfills(),
 			addons(),
 			glconstants(),
