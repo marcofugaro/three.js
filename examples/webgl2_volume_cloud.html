@@ -17,6 +17,7 @@
 			import { OrbitControls } from './jsm/controls/OrbitControls.js';
 			import { ImprovedNoise } from './jsm/math/ImprovedNoise.js';
 
+			import Stats from './jsm/libs/stats.module.js';
 			import { GUI } from './jsm/libs/dat.gui.module.js';
 			import { WEBGL } from './jsm/WebGL.js';
 
@@ -26,7 +27,7 @@
 
 			}
 
-			let renderer, scene, camera;
+			let renderer, scene, camera, stats;
 			let mesh;
 
 			init();
@@ -250,6 +251,7 @@
 				} );
 
 				mesh = new THREE.Mesh( geometry, material );
+				mesh.scale.set( 2, 0.5, 2 );
 				scene.add( mesh );
 
 				//
@@ -258,7 +260,7 @@
 					threshold: 0.25,
 					opacity: 0.25,
 					range: 0.1,
-					steps: 100
+					steps: 30
 				};
 
 				function update() {
@@ -270,11 +272,17 @@
 
 				}
 
+				update();
+
 				const gui = new GUI();
 				gui.add( parameters, 'threshold', 0, 1, 0.01 ).onChange( update );
 				gui.add( parameters, 'opacity', 0, 1, 0.01 ).onChange( update );
 				gui.add( parameters, 'range', 0, 1, 0.01 ).onChange( update );
 				gui.add( parameters, 'steps', 0, 200, 1 ).onChange( update );
+
+
+				stats = new Stats();
+				document.body.appendChild( stats.dom );
 
 				window.addEventListener( 'resize', onWindowResize );
 
@@ -299,6 +307,8 @@
 				mesh.material.uniforms.frame.value ++;
 
 				renderer.render( scene, camera );
+
+				stats.update();
 
 			}
 
