@@ -1,16 +1,7 @@
 import babel from '@rollup/plugin-babel';
 import { nodeResolve } from '@rollup/plugin-node-resolve';
 import { terser } from 'rollup-plugin-terser';
-
-if ( String.prototype.replaceAll === undefined ) {
-
-	String.prototype.replaceAll = function ( find, replace ) {
-
-		return this.split( find ).join( replace );
-
-	};
-
-}
+import babelrc from '../../babel.config.json';
 
 function glconstants() {
 
