@@ -56,5 +56,7 @@ class DodecahedronGeometry extends PolyhedronGeometry {
 
 }
 
+DodecahedronGeometry.prototype.isDodecahedronGeometry = true;
+
 
 export { DodecahedronGeometry, DodecahedronGeometry as DodecahedronBufferGeometry };

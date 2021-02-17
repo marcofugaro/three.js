@@ -1047,7 +1047,17 @@
 	function _inheritsLoose(subClass, superClass) {
 		subClass.prototype = Object.create(superClass.prototype);
 		subClass.prototype.constructor = subClass;
-		subClass.__proto__ = superClass;
+
+		_setPrototypeOf(subClass, superClass);
+	}
+
+	function _setPrototypeOf(o, p) {
+		_setPrototypeOf = Object.setPrototypeOf || function _setPrototypeOf(o, p) {
+			o.__proto__ = p;
+			return o;
+		};
+
+		return _setPrototypeOf(o, p);
 	}
 
 	function _assertThisInitialized(self) {
@@ -3453,7 +3463,6 @@
 				z = 0;
 			}
 
-			this.isVector3 = true;
 			this.x = x;
 			this.y = y;
 			this.z = z;
@@ -3987,6 +3996,8 @@
 
 		return Vector3;
 	}();
+
+	Vector3.prototype.isVector3 = true;
 
 	var _vector = /*@__PURE__*/new Vector3();
 
@@ -21705,6 +21716,8 @@
 
 		return DodecahedronGeometry;
 	}(PolyhedronGeometry);
+
+	DodecahedronGeometry.prototype.isDodecahedronGeometry = true;
 
 	var _v0$2 = new Vector3();
 
