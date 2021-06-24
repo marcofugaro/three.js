@@ -12,16 +12,19 @@
 			<button id="exportFile">Export DRC</button>
 		</div>
 
-		<script src="js/libs/draco/draco_encoder.js"></script>
-
 		<script type="module">
-
 			import * as THREE from '../build/three.module.js';
 
 			import { OrbitControls } from './jsm/controls/OrbitControls.js';
 			import { DRACOExporter } from './jsm/exporters/DRACOExporter.js';
 
-			let scene, camera, renderer, exporter, mesh;
+			let scene, camera, renderer, mesh;
+
+			// Configure and create Draco encoder.
+			const dracoExporter = new DRACOExporter();
+			dracoExporter.setEncoderPath( 'js/libs/draco/' );
+			// dracoExporter.setEncoderConfig( { type: 'js' } );
+			dracoExporter.preload();
 
 			init();
 			animate();
@@ -34,8 +37,6 @@
 				scene = new THREE.Scene();
 				scene.background = new THREE.Color( 0xa0a0a0 );
 				scene.fog = new THREE.Fog( 0xa0a0a0, 200, 1000 );
-
-				exporter = new DRACOExporter();
 
 				//
 
@@ -117,9 +118,9 @@
 
 			}
 
-			function exportFile() {
+			async function exportFile() {
 
-				const result = exporter.parse( mesh );
+				const result = await dracoExporter.parse( mesh );
 				saveArrayBuffer( result, 'file.drc' );
 
 			}

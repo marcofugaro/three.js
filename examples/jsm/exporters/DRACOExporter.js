@@ -11,12 +11,113 @@
  *  - exportUvs
  *  - exportNormals
  */
+import {
+	FileLoader,
+} from '../../../build/three.module.js';
 
-/* global DracoEncoderModule */
 
 class DRACOExporter {
 
-	parse( object, options = {
+	constructor() {
+
+		this.encoderPath = '';
+		this.encoderConfig = {};
+		this.encoderPending = null;
+
+	}
+
+	setEncoderPath( path ) {
+
+		this.encoderPath = path;
+
+		return this;
+
+	}
+
+	setEncoderConfig( config ) {
+
+		this.encoderConfig = config;
+
+		return this;
+
+	}
+
+
+	_loadLibrary( url, responseType ) {
+
+		const loader = new FileLoader();
+		loader.setPath( this.encoderPath );
+		loader.setResponseType( responseType );
+		loader.setWithCredentials( this.withCredentials );
+
+		return new Promise( ( resolve, reject ) => {
+
+			loader.load( url, resolve, undefined, reject );
+
+		} );
+
+	}
+
+
+
+	_loadScript( url ) {
+
+		return new Promise( ( resolve, reject ) => {
+
+			const script = document.createElement( 'script' );
+
+			script.onload = resolve;
+			script.onerror = reject;
+
+			script.src = this.encoderPath + url;
+			document.head.appendChild( script );
+
+		} );
+
+	}
+
+	preload() {
+
+		this._initEncoder();
+
+		return this;
+
+	}
+
+	_initEncoder() {
+
+		if ( this.encoderPending ) return this.encoderPending;
+
+		const useJS = typeof WebAssembly !== 'object' || this.encoderConfig.type === 'js';
+		const librariesPending = [];
+
+		if ( useJS ) {
+
+			librariesPending.push( this._loadScript( 'draco_encoder.js' ) );
+
+		} else {
+
+			librariesPending.push( this._loadScript( 'draco_encoder_wrapper.js' ) );
+			librariesPending.push( this._loadLibrary( 'draco_encoder.wasm', 'arraybuffer' ) );
+
+		}
+
+		this.encoderPending = Promise.all( librariesPending )
+			.then( ( libraries ) => {
+
+				if ( ! useJS ) {
+
+					this.encoderConfig.wasmBinary = libraries[ 1 ];
+
+				}
+
+			} );
+
+		return this.encoderPending;
+
+	}
+
+	async parse( object, options = {
 		decodeSpeed: 5,
 		encodeSpeed: 5,
 		encoderMethod: DRACOExporter.MESH_EDGEBREAKER_ENCODING,
@@ -40,7 +141,20 @@ class DRACOExporter {
 
 		const geometry = object.geometry;
 
-		const dracoEncoder = DracoEncoderModule();
+
+		const useJS = typeof WebAssembly !== 'object' || this.encoderConfig.type === 'js';
+
+		let dracoEncoder;
+		if ( useJS ) {
+
+			dracoEncoder = DracoEncoderModule( this.encoderConfig );
+
+		} else {
+
+			dracoEncoder = await DracoEncoderModule( this.encoderConfig );
+
+		}
+
 		const encoder = new dracoEncoder.Encoder();
 		let builder;
 		let dracoObject;
