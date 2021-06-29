@@ -98,7 +98,7 @@ class GLTFExporter {
 
 		}
 
-		if ( options.draco ) {
+		if ( options && options.draco ) {
 
 			writer.dracoExporter = this.dracoExporter;
 
@@ -1662,13 +1662,7 @@ class GLTFWriter {
 			}
 
 			// add draco to extensionsUsed
-			if ( ! json.extensionsUsed ) json.extensionsUsed = [];
-
-			if ( ! json.extensionsUsed.includes( 'KHR_draco_mesh_compression' ) ) {
-
-				json.extensionsUsed.push( 'KHR_draco_mesh_compression' );
-
-			}
+			this.extensionsUsed[ 'KHR_draco_mesh_compression' ] = true;
 
 		}
 
