@@ -18,13 +18,15 @@ import {
 	RGBFormat,
 	RepeatWrapping,
 	Scene,
-	Vector3
+	Vector3,
 } from '../../../build/three.module.js';
 
 
 class GLTFExporter {
 
 	constructor() {
+
+		this.dracoExporter = null;
 
 		this.pluginCallbacks = [];
 
@@ -72,6 +74,13 @@ class GLTFExporter {
 
 	}
 
+	setDRACOExporter( dracoExporter ) {
+
+		this.dracoExporter = dracoExporter;
+		return this;
+
+	}
+
 	/**
 	 * Parse scenes and generate GLTF output
 	 * @param  {Scene or [THREE.Scenes]} input   Scene or Array of THREE.Scenes
@@ -86,6 +95,12 @@ class GLTFExporter {
 		for ( let i = 0, il = this.pluginCallbacks.length; i < il; i ++ ) {
 
 			plugins.push( this.pluginCallbacks[ i ]( writer ) );
+
+		}
+
+		if ( options.draco ) {
+
+			writer.dracoExporter = this.dracoExporter;
 
 		}
 
@@ -369,11 +384,12 @@ class GLTFWriter {
 	 * @param  {Function} onDone  Callback on completed
 	 * @param  {Object} options options
 	 */
-	write( input, onDone, options ) {
+	async write( input, onDone, options ) {
 
 		this.options = Object.assign( {}, {
 			// default options
 			binary: false,
+			draco: false,
 			trs: false,
 			onlyVisible: true,
 			truncateDrawRange: true,
@@ -390,7 +406,7 @@ class GLTFWriter {
 
 		}
 
-		this.processInput( input );
+		await this.processInput( input );
 
 		const writer = this;
 
@@ -891,29 +907,36 @@ class GLTFWriter {
 		if ( count === 0 ) return null;
 
 		const minMax = getMinMax( attribute, start, count );
-		let bufferViewTarget;
 
-		// If geometry isn't provided, don't infer the target usage of the bufferView. For
-		// animation samplers, target must not be set.
-		if ( geometry !== undefined ) {
-
-			bufferViewTarget = attribute === geometry.index ? WEBGL_CONSTANTS.ELEMENT_ARRAY_BUFFER : WEBGL_CONSTANTS.ARRAY_BUFFER;
-
-		}
-
-		const bufferView = this.processBufferView( attribute, componentType, start, count, bufferViewTarget );
 
 		const accessorDef = {
-
-			bufferView: bufferView.id,
-			byteOffset: bufferView.byteOffset,
 			componentType: componentType,
 			count: count,
 			max: minMax.max,
 			min: minMax.min,
 			type: types[ attribute.itemSize ]
-
 		};
+
+
+		if ( ! this.options.draco ) {
+
+			let bufferViewTarget;
+
+			// If geometry isn't provided, don't infer the target usage of the bufferView. For
+			// animation samplers, target must not be set.
+			if ( geometry !== undefined ) {
+
+				bufferViewTarget = attribute === geometry.index ? WEBGL_CONSTANTS.ELEMENT_ARRAY_BUFFER : WEBGL_CONSTANTS.ARRAY_BUFFER;
+
+			}
+
+			const bufferView = this.processBufferView( attribute, componentType, start, count, bufferViewTarget );
+
+			accessorDef.bufferView = bufferView.id;
+			accessorDef.byteOffset = bufferView.byteOffset;
+
+		}
+
 
 		if ( attribute.normalized === true ) accessorDef.normalized = true;
 		if ( ! json.accessors ) json.accessors = [];
@@ -1294,7 +1317,7 @@ class GLTFWriter {
 	 * @param  {THREE.Mesh} mesh Mesh to process
 	 * @return {Integer|null} Index of the processed mesh in the "meshes" array
 	 */
-	processMesh( mesh ) {
+	async processMesh( mesh ) {
 
 		const cache = this.cache;
 		const json = this.json;
@@ -1582,6 +1605,73 @@ class GLTFWriter {
 
 		meshDef.primitives = primitives;
 
+		if ( this.options.draco ) {
+
+			const dracoOutput = await this.dracoExporter.parse( mesh );
+
+			// Add buffer
+			this.processBuffer( dracoOutput.buffer );
+
+			// Add single bufferView
+			const bufferView = {
+				buffer: 0,
+				byteOffset: 0,
+				byteLength: dracoOutput.buffer.length
+			};
+
+			if ( ! json.bufferViews ) json.bufferViews = [];
+
+			json.bufferViews.push( bufferView );
+
+
+			primitives.forEach( primitive => {
+
+				// Add draco extension to the primitive
+				if ( ! primitive.extensions ) primitive.extensions = {};
+				primitive.extensions[ 'KHR_draco_mesh_compression' ] = {
+					bufferView: 0,
+					attributes: dracoOutput.attributeIDs
+				};
+
+				// Add new indices data to indices accessor
+				if ( primitive.hasOwnProperty( 'indices' ) ) {
+
+					const indicesAccessor = json.accessors[ primitive.indices ];
+					indicesAccessor.count = dracoOutput.numberOfFaces * 3;
+
+				}
+
+				// Add new attributes data to its relative accessor
+				for ( const semantic in dracoOutput.attributeIDs ) {
+
+					const attributeAccessor = json.accessors[ primitive.attributes[ semantic ] ];
+					attributeAccessor.count = dracoOutput.numberOfPoints;
+
+				}
+
+			} );
+
+
+			// add draco to extensionsRequired
+			if ( ! json.extensionsRequired ) json.extensionsRequired = [];
+
+			if ( ! json.extensionsRequired.includes( 'KHR_draco_mesh_compression' ) ) {
+
+				json.extensionsRequired.push( 'KHR_draco_mesh_compression' );
+
+			}
+
+			// add draco to extensionsUsed
+			if ( ! json.extensionsUsed ) json.extensionsUsed = [];
+
+			if ( ! json.extensionsUsed.includes( 'KHR_draco_mesh_compression' ) ) {
+
+				json.extensionsUsed.push( 'KHR_draco_mesh_compression' );
+
+			}
+
+		}
+
 		if ( ! json.meshes ) json.meshes = [];
 
 		this._invokeAll( function ( ext ) {
@@ -1802,7 +1892,7 @@ class GLTFWriter {
 	 * @param  {THREE.Object3D} node Object3D to processNode
 	 * @return {Integer} Index of the node in the nodes list
 	 */
-	processNode( object ) {
+	async processNode( object ) {
 
 		const json = this.json;
 		const options = this.options;
@@ -1859,7 +1949,7 @@ class GLTFWriter {
 
 		if ( object.isMesh || object.isLine || object.isPoints ) {
 
-			const meshIndex = this.processMesh( object );
+			const meshIndex = await this.processMesh( object );
 
 			if ( meshIndex !== null ) nodeDef.mesh = meshIndex;
 
@@ -1881,7 +1971,7 @@ class GLTFWriter {
 
 				if ( child.visible || options.onlyVisible === false ) {
 
-					const nodeIndex = this.processNode( child );
+					const nodeIndex = await this.processNode( child );
 
 					if ( nodeIndex !== null ) children.push( nodeIndex );
 
@@ -1909,7 +1999,7 @@ class GLTFWriter {
 	 * Process Scene
 	 * @param  {Scene} node Scene to process
 	 */
-	processScene( scene ) {
+	async processScene( scene ) {
 
 		const json = this.json;
 		const options = this.options;
@@ -1935,7 +2025,7 @@ class GLTFWriter {
 
 			if ( child.visible || options.onlyVisible === false ) {
 
-				const nodeIndex = this.processNode( child );
+				const nodeIndex = await this.processNode( child );
 
 				if ( nodeIndex !== null ) nodes.push( nodeIndex );
 
@@ -1953,7 +2043,7 @@ class GLTFWriter {
 	 * Creates a Scene to hold a list of objects and parse it
 	 * @param  {Array} objects List of objects to process
 	 */
-	processObjects( objects ) {
+	async processObjects( objects ) {
 
 		const scene = new Scene();
 		scene.name = 'AuxScene';
@@ -1966,14 +2056,14 @@ class GLTFWriter {
 
 		}
 
-		this.processScene( scene );
+		await this.processScene( scene );
 
 	}
 
 	/**
 	 * @param {THREE.Object3D|Array<THREE.Object3D>} input
 	 */
-	processInput( input ) {
+	async processInput( input ) {
 
 		const options = this.options;
 
@@ -1991,7 +2081,7 @@ class GLTFWriter {
 
 			if ( input[ i ] instanceof Scene ) {
 
-				this.processScene( input[ i ] );
+				await this.processScene( input[ i ] );
 
 			} else {
 
@@ -2001,7 +2091,7 @@ class GLTFWriter {
 
 		}
 
-		if ( objectsWithoutScene.length > 0 ) this.processObjects( objectsWithoutScene );
+		if ( objectsWithoutScene.length > 0 ) await this.processObjects( objectsWithoutScene );
 
 		for ( let i = 0; i < this.skins.length; ++ i ) {
 

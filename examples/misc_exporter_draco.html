@@ -23,7 +23,7 @@
 			// Configure and create Draco encoder.
 			const dracoExporter = new DRACOExporter();
 			dracoExporter.setEncoderPath( 'js/libs/draco/' );
-			// dracoExporter.setEncoderConfig( { type: 'js' } );
+			dracoExporter.setEncoderConfig( { type: 'js' } );
 			dracoExporter.preload();
 
 			init();
@@ -121,7 +121,7 @@
 			async function exportFile() {
 
 				const result = await dracoExporter.parse( mesh );
-				saveArrayBuffer( result, 'file.drc' );
+				saveArrayBuffer( result.buffer, 'file.drc' );
 
 			}
 
