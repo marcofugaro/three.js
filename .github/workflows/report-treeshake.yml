@@ -1,4 +1,4 @@
-name: Report tree-shaken size
+name: Report Tree-shaken Size
 
 on:
   pull_request:
@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   report-treeshake:
-    name: Report Tree-shaking Size
+    name: Report Tree-shaken Size
     runs-on: ubuntu-latest
     steps:
       - name: Git checkout
