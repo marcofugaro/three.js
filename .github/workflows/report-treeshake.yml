@@ -17,16 +17,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Git checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
       - name: Install Node
-        uses: actions/setup-node@v2
+        uses: actions/setup-node@v3
         with:
-          node-version: 16
+          node-version: 18
           cache: 'npm'
       - name: Install packages
         run: npm ci
       - name: Build
-        run: npm run build
+        run: npm run build-module
       - name: === Test tree-shake ===
         run: npm run test-treeshake
       - name: Read tree-shaken size
@@ -38,7 +38,8 @@ jobs:
           gzip -k $BUNDLE_PATH
           FILESIZE_GZIP=$(du -sh $BUNDLE_PATH.gz | awk '{print $1}')
           echo "FILESIZE_GZIP=$FILESIZE_GZIP" >> $GITHUB_OUTPUT
-          IMAGE_BASE64=$(base64 -w 0 DSC_0251.JPG)
+          IMAGE_BASE64=$(base64 -w 0 image.png)
+          echo "IMAGE_BASE64=$IMAGE_BASE64" >> $GITHUB_OUTPUT
       - name: Find existing comment
         uses: peter-evans/find-comment@v2
         id: find-comment
@@ -54,4 +55,5 @@ jobs:
           edit-mode: replace
           body: |
             ### 📦 Bundle size after tree-shake: **${{ steps.read-size.outputs.FILESIZE }}** (${{ steps.read-size.outputs.FILESIZE_GZIP }} gzipped)
-            Show full report
+            Show full report:
+            <img src="data:image/png;base64,${{ steps.read-size.outputs.IMAGE_BASE64 }}" />
