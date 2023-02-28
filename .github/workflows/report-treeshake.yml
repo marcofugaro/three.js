@@ -4,9 +4,9 @@ on:
   pull_request:
     # TEMP
     types: [synchronize]
-    paths:
-      - 'src/**'
-      - 'package.json'
+    # paths:
+    #   - 'src/**'
+    #   - 'package.json'
 
 permissions:
   contents: read
