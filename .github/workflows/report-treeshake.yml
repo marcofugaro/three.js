@@ -2,6 +2,7 @@ name: Report Tree-shaken Size
 
 on:
   pull_request_target:
+    branches: [dev]
     # TEMP
     types: [synchronize]
     # paths:
