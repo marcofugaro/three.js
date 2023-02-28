@@ -1,0 +1,56 @@
+name: Report Tree-shaken Size
+
+on:
+  pull_request_target:
+    branches: [dev]
+    # TEMP
+    types: [synchronize]
+    # paths:
+    #   - 'src/**'
+    #   - 'package.json'
+
+permissions:
+  contents: read
+
+jobs:
+  report-treeshake:
+    name: Report Tree-shaken Size
+    runs-on: ubuntu-latest
+    steps:
+      - name: Git checkout
+        uses: actions/checkout@v3
+      - name: Install Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+          cache: 'npm'
+      - name: Install packages
+        run: npm ci
+      - name: Build
+        run: npm run build-module
+      - name: === Test tree-shake ===
+        run: npm run test-treeshake
+      - name: Read tree-shaken size
+        id: read-size
+        run: |
+          BUNDLE_PATH="test/treeshake/index.bundle.min.js"
+          FILESIZE=$(du -sh $BUNDLE_PATH | awk '{print $1}')
+          echo "FILESIZE=$FILESIZE" >> $GITHUB_OUTPUT
+          gzip -k $BUNDLE_PATH
+          FILESIZE_GZIP=$(du -sh $BUNDLE_PATH.gz | awk '{print $1}')
+          echo "FILESIZE_GZIP=$FILESIZE_GZIP" >> $GITHUB_OUTPUT
+      - name: Find existing comment
+        uses: peter-evans/find-comment@v2
+        id: find-comment
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: Bundle size
+      - name: Comment on PR
+        uses: peter-evans/create-or-update-comment@v2
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-id: ${{ steps.find-comment.outputs.comment-id }}
+          edit-mode: replace
+          body: |
+            ### 📦 Bundle size after tree-shake: **${{ steps.read-size.outputs.FILESIZE }}** (${{ steps.read-size.outputs.FILESIZE_GZIP }} gzipped)
