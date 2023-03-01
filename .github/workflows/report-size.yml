@@ -1,4 +1,4 @@
-name: Report Tree-shaken Size
+name: Report size
 
 on:
   workflow_run:
@@ -9,8 +9,8 @@ on:
     #   - 'package.json'
 
 jobs:
-  report-treeshake:
-    name: Report Tree-shaken Size
+  treeshaking:
+    name: Tree-shaking
     runs-on: ubuntu-latest
     # if: github.event.workflow_run.event == 'pull_request'
     steps:
