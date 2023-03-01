@@ -29,11 +29,10 @@ jobs:
       - name: Read tree-shaken size
         id: read-size
         run: |
-          BUNDLE_PATH="test/treeshake/index.bundle.min.js"
-          FILESIZE=$(du -sh $BUNDLE_PATH | awk '{print $1}')
+          FILESIZE=$(stat --format=%s test/treeshake/index.bundle.min.js | npx pretty-bytes)
           echo "FILESIZE=$FILESIZE" >> $GITHUB_OUTPUT
-          gzip -k $BUNDLE_PATH
-          FILESIZE_GZIP=$(du -sh $BUNDLE_PATH.gz | awk '{print $1}')
+          gzip -k test/treeshake/index.bundle.min.js
+          FILESIZE_GZIP=$(stat --format=%s test/treeshake/index.bundle.min.js.gz | npx pretty-bytes)
           echo "FILESIZE_GZIP=$FILESIZE_GZIP" >> $GITHUB_OUTPUT
       - name: Find existing comment
         uses: peter-evans/find-comment@v2
