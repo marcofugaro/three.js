@@ -51,7 +51,7 @@ jobs:
       - name: === Test tree-shaking ===
         run: npm run test-treeshake
       - name: Read tree-shaken size
-        id: read-size
+        id: read-size-base
         run: |
           BASE_FILESIZE=$(stat --format=%s test/treeshake/index.bundle.min.js | npx pretty-bytes)
           echo "BASE_FILESIZE=$BASE_FILESIZE" >> $GITHUB_OUTPUT
@@ -76,4 +76,4 @@ jobs:
             | Filesize | Gzipped | Diff |
             |----------|---------|------|
             | ${{ steps.read-size.outputs.FILESIZE }} | ${{ steps.read-size.outputs.FILESIZE_GZIP }} | +0.0% |
-            | ${{ steps.read-size.outputs.BASE_FILESIZE }} | ${{ steps.read-size.outputs.BASE_FILESIZE_GZIP }} | +0.0% |
+            | ${{ steps.read-size-base.outputs.BASE_FILESIZE }} | ${{ steps.read-size-base.outputs.BASE_FILESIZE_GZIP }} | +0.0% |
