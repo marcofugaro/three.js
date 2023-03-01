@@ -8,9 +8,6 @@ on:
     #   - 'src/**'
     #   - 'package.json'
 
-# permissions:
-#   contents: read
-
 jobs:
   report-treeshake:
     name: Report Tree-shaken Size
@@ -23,11 +20,11 @@ jobs:
         with:
           node-version: 18
           cache: 'npm'
-      - name: Install packages
+      - name: Install dependencies
         run: npm ci
       - name: Build
         run: npm run build-module
-      - name: === Test tree-shake ===
+      - name: === Test tree-shaking ===
         run: npm run test-treeshake
       - name: Read tree-shaken size
         id: read-size
@@ -52,4 +49,7 @@ jobs:
           comment-id: ${{ steps.find-comment.outputs.comment-id }}
           edit-mode: replace
           body: |
-            ### 📦 Bundle size after tree-shake: **${{ steps.read-size.outputs.FILESIZE }}** (${{ steps.read-size.outputs.FILESIZE_GZIP }} gzipped)
+            #### 📦 Bundle size after tree-shaking
+            | Filesize | Gzipped | Diff |
+            |----------|---------|------|
+            | ${{ steps.read-size.outputs.FILESIZE }} | ${{ steps.read-size.outputs.FILESIZE_GZIP }} | +0.0% |
