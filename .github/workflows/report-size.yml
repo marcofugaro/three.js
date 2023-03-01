@@ -29,23 +29,19 @@ jobs:
       - name: Read tree-shaken size
         id: read-size
         run: |
-          FILESIZE=$(stat --format=%s test/treeshake/index.bundle.min.js | npx pretty-bytes)
-          echo "FILESIZE=$FILESIZE" >> $GITHUB_OUTPUT
+          FILESIZE=$(stat --format=%s test/treeshake/index.bundle.min.js)
           gzip -k test/treeshake/index.bundle.min.js
-          FILESIZE_GZIP=$(stat --format=%s test/treeshake/index.bundle.min.js.gz | npx pretty-bytes)
+          FILESIZE_GZIP=$(stat --format=%s test/treeshake/index.bundle.min.js.gz)
+          echo "FILESIZE=$FILESIZE" >> $GITHUB_OUTPUT
           echo "FILESIZE_GZIP=$FILESIZE_GZIP" >> $GITHUB_OUTPUT
+
       - name: Checkout base branch
         uses: actions/checkout@v3
         with:
           ref: ${{ github.event.pull_request.base.ref }}
           repository: ${{ github.event.pull_request.base.repo.full_name }}
-      # - name: Install Node
-      #   uses: actions/setup-node@v3
-      #   with:
-      #     node-version: 18
-      #     cache: 'npm'
-      # - name: Install dependencies
-      #   run: npm ci
+      - name: Install dependencies
+        run: npm ci
       - name: Build
         run: npm run build-module
       - name: === Test tree-shaking ===
@@ -53,11 +49,16 @@ jobs:
       - name: Read tree-shaken size
         id: read-size-base
         run: |
-          BASE_FILESIZE=$(stat --format=%s test/treeshake/index.bundle.min.js | npx pretty-bytes)
-          echo "BASE_FILESIZE=$BASE_FILESIZE" >> $GITHUB_OUTPUT
-          gzip -k test/treeshake/index.bundle.min.js
-          BASE_FILESIZE_GZIP=$(stat --format=%s test/treeshake/index.bundle.min.js.gz | npx pretty-bytes)
-          echo "BASE_FILESIZE_GZIP=$BASE_FILESIZE_GZIP" >> $GITHUB_OUTPUT
+          FILESIZE_BASE=$(stat --format=%s test/treeshake/index.bundle.min.js)
+          echo "FILESIZE_BASE=$FILESIZE_BASE" >> $GITHUB_OUTPUT
+      - name: Compute diff
+        id: compute-diff
+        run: |
+          FILESIZE=${{ steps.read-size.outputs.FILESIZE }}
+          FILESIZE_BASE=${{ steps.read-size-base.outputs.FILESIZE_BASE }}
+          FILESIZE_DIFF=$(( ($FILESIZE - $FILESIZE_BASE) * 100 / $FILESIZE_BASE ))
+          echo "FILESIZE_DIFF=$FILESIZE_DIFF" >> $GITHUB_OUTPUT
+
       - name: Find existing comment
         uses: peter-evans/find-comment@v2
         id: find-comment
@@ -75,5 +76,4 @@ jobs:
             ### 📦 Bundle size after tree-shaking
             | Filesize | Gzipped | Diff |
             |----------|---------|------|
-            | ${{ steps.read-size.outputs.FILESIZE }} | ${{ steps.read-size.outputs.FILESIZE_GZIP }} | +0.0% |
-            | ${{ steps.read-size-base.outputs.BASE_FILESIZE }} | ${{ steps.read-size-base.outputs.BASE_FILESIZE_GZIP }} | +0.0% |
+            | ${{ steps.read-size.outputs.FILESIZE }} | ${{ steps.read-size.outputs.FILESIZE_GZIP }} | ${{ steps.compute-diff.outputs.FILESIZE_DIFF }}% |
