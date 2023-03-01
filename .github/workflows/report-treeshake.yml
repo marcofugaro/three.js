@@ -49,7 +49,7 @@ jobs:
           comment-id: ${{ steps.find-comment.outputs.comment-id }}
           edit-mode: replace
           body: |
-            #### 📦 Bundle size after tree-shaking
+            ### 📦 Bundle size after tree-shaking
             | Filesize | Gzipped | Diff |
             |----------|---------|------|
             | ${{ steps.read-size.outputs.FILESIZE }} | ${{ steps.read-size.outputs.FILESIZE_GZIP }} | +0.0% |
