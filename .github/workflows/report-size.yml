@@ -34,6 +34,30 @@ jobs:
           gzip -k test/treeshake/index.bundle.min.js
           FILESIZE_GZIP=$(stat --format=%s test/treeshake/index.bundle.min.js.gz | npx pretty-bytes)
           echo "FILESIZE_GZIP=$FILESIZE_GZIP" >> $GITHUB_OUTPUT
+      - name: Checkout base branch
+        uses: actions/checkout@v3
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+          repository: ${{ github.event.pull_request.base.repo.full_name }}
+      # - name: Install Node
+      #   uses: actions/setup-node@v3
+      #   with:
+      #     node-version: 18
+      #     cache: 'npm'
+      # - name: Install dependencies
+      #   run: npm ci
+      - name: Build
+        run: npm run build-module
+      - name: === Test tree-shaking ===
+        run: npm run test-treeshake
+      - name: Read tree-shaken size
+        id: read-size
+        run: |
+          BASE_FILESIZE=$(stat --format=%s test/treeshake/index.bundle.min.js | npx pretty-bytes)
+          echo "BASE_FILESIZE=$BASE_FILESIZE" >> $GITHUB_OUTPUT
+          gzip -k test/treeshake/index.bundle.min.js
+          BASE_FILESIZE_GZIP=$(stat --format=%s test/treeshake/index.bundle.min.js.gz | npx pretty-bytes)
+          echo "BASE_FILESIZE_GZIP=$BASE_FILESIZE_GZIP" >> $GITHUB_OUTPUT
       - name: Find existing comment
         uses: peter-evans/find-comment@v2
         id: find-comment
@@ -52,3 +76,4 @@ jobs:
             | Filesize | Gzipped | Diff |
             |----------|---------|------|
             | ${{ steps.read-size.outputs.FILESIZE }} | ${{ steps.read-size.outputs.FILESIZE_GZIP }} | +0.0% |
+            | ${{ steps.read-size.outputs.BASE_FILESIZE }} | ${{ steps.read-size.outputs.BASE_FILESIZE_GZIP }} | +0.0% |
