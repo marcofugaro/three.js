@@ -1,6 +1,7 @@
+// used in report-size.yml
 import prettyBytes from 'pretty-bytes';
 
-// used in report-size.yml
+const n = Number( process.argv[ 2 ] );
+const formatted = prettyBytes( n, { minimumFractionDigits: 0, maximumFractionDigits: 1 } );
 
-const n = Number( input );
-const ret = prettyBytes( n, { minimumFractionDigits: 0, maximumFractionDigits: 1 } );
+process.stdout.write( formatted );

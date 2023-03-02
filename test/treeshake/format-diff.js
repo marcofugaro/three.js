@@ -1,4 +1,9 @@
 // used in report-size.yml
 
-const n = Number( input );
-const ret = `${Math.sign( n )}${n.toFixed( 1 )}%`;
+const filesize = Number( process.argv[ 2 ] );
+const filesizeBase = Number( process.argv[ 3 ] );
+
+const diff = ( filesize - filesizeBase ) * 100 / filesizeBase;
+const formatted = `${diff >= 0 ? '+' : ''}${diff.toFixed( 1 )}%`;
+
+process.stdout.write( formatted );
