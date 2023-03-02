@@ -1,48 +1,36 @@
 name: Report size
 
 on:
-  pull_request:
-    # TEMP
-    types: [opened, synchronize]
-    # paths:
-    #   - 'src/**'
-    #   - 'package.json'
+  workflow_run:
+    workflows: ["Read size"]
+    types:
+      - completed
 
-# Permissions:
-# - read the repo content
-# - write to pull requests (needed for the comment)
+# This workflow needs to be run with "pull-requests: write" permissions to
+# be able to comment on the pull request. We can't checkout the PR code
+# in this workflow.
+# Reference:
+# https://securitylab.github.com/research/github-actions-preventing-pwn-requests/
 permissions:
-  contents: read
   pull-requests: write
 
 jobs:
   treeshaking:
     name: Tree-shaking
     runs-on: ubuntu-latest
+    if: github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
     steps:
-
+      - name: Dump GitHub context
+        env:
+          GITHUB_CONTEXT: ${{ toJson(github) }}
+        run: echo "$GITHUB_CONTEXT"
       - name: Checkout base branch
         uses: actions/checkout@v3
         with:
+          # TODO these are not correct
           ref: ${{ github.event.pull_request.base.ref }}
           repository: ${{ github.event.pull_request.base.repo.full_name }}
-      - name: Install dependencies
-        run: npm ci
-      - name: Build
-        run: npm run build-module
-      - name: === Test tree-shaking ===
-        run: npm run test-treeshake
-      - name: Read tree-shaken size
-        id: read-size-base
-        run: |
-          FILESIZE_BASE=$(stat --format=%s test/treeshake/index.bundle.min.js)
-          echo "FILESIZE_BASE=$FILESIZE_BASE" >> $GITHUB_OUTPUT
-
-      - name: Git checkout
-        uses: actions/checkout@v3
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
       - name: Install Node
         uses: actions/setup-node@v3
         with:
@@ -55,14 +43,10 @@ jobs:
       - name: === Test tree-shaking ===
         run: npm run test-treeshake
       - name: Read tree-shaken size
-        id: read-size
+        id: read-size-base
         run: |
-          FILESIZE=$(stat --format=%s test/treeshake/index.bundle.min.js)
-          gzip -k test/treeshake/index.bundle.min.js
-          FILESIZE_GZIP=$(stat --format=%s test/treeshake/index.bundle.min.js.gz)
-          echo "FILESIZE=$FILESIZE" >> $GITHUB_OUTPUT
-          echo "FILESIZE_GZIP=$FILESIZE_GZIP" >> $GITHUB_OUTPUT
-
+          FILESIZE_BASE=$(stat --format=%s test/treeshake/index.bundle.min.js)
+          echo "FILESIZE_BASE=$FILESIZE_BASE" >> $GITHUB_OUTPUT
       - name: Format
         id: format
         run: |
@@ -77,6 +61,7 @@ jobs:
         uses: peter-evans/find-comment@v2
         id: find-comment
         with:
+          # TODO these are not correct
           issue-number: ${{ github.event.pull_request.number }}
           comment-author: 'github-actions[bot]'
           body-includes: Bundle size
