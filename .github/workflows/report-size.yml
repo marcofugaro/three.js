@@ -8,6 +8,13 @@ on:
     #   - 'src/**'
     #   - 'package.json'
 
+# Permissions:
+# - read the repo content
+# - write to pull requests (needed for the comment)
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   treeshaking:
     name: Tree-shaking
@@ -56,7 +63,17 @@ jobs:
         run: |
           FILESIZE=${{ steps.read-size.outputs.FILESIZE }}
           FILESIZE_BASE=${{ steps.read-size-base.outputs.FILESIZE_BASE }}
-          FILESIZE_DIFF=$(echo "scale=1; ($FILESIZE - $FILESIZE_BASE) * 100 / $FILESIZE_BASE" | bc)
+          FILESIZE_DIFF=$(echo "scale=4; ($FILESIZE - $FILESIZE_BASE) * 100 / $FILESIZE_BASE" | bc)
+          echo "FILESIZE_DIFF=$FILESIZE_DIFF" >> $GITHUB_OUTPUT
+
+      - name: Format
+        id: format
+        run: |
+          FILESIZE=$(node test/treeshake/format-size.js ${{ steps.read-size.outputs.FILESIZE }})
+          FILESIZE_GZIP=$(node test/treeshake/format-size.js ${{ steps.read-size.outputs.FILESIZE_GZIP }})
+          FILESIZE_DIFF=$(node test/treeshake/format-diff.js ${{ steps.compute-diff.outputs.FILESIZE_DIFF }})
+          echo "FILESIZE=$FILESIZE" >> $GITHUB_OUTPUT
+          echo "FILESIZE_GZIP=$FILESIZE_GZIP" >> $GITHUB_OUTPUT
           echo "FILESIZE_DIFF=$FILESIZE_DIFF" >> $GITHUB_OUTPUT
 
       - name: Find existing comment
@@ -76,4 +93,4 @@ jobs:
             ### 📦 Bundle size after tree-shaking
             | Filesize | Gzipped | Diff |
             |----------|---------|------|
-            | ${{ steps.read-size.outputs.FILESIZE }} | ${{ steps.read-size.outputs.FILESIZE_GZIP }} | ${{ steps.compute-diff.outputs.FILESIZE_DIFF }}% |
+            | ${{ steps.format.outputs.FILESIZE }} | ${{ steps.format.outputs.FILESIZE_GZIP }} | ${{ steps.format.outputs.FILESIZE_DIFF }}% |
