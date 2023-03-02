@@ -59,6 +59,9 @@ jobs:
           FILESIZE_BASE=$(stat --format=%s test/treeshake/index.bundle.min.js)
           echo "FILESIZE_BASE=$FILESIZE_BASE" >> $GITHUB_OUTPUT
 
+      - name: Git checkout
+        uses: actions/checkout@v3
+
       - name: Format
         id: format
         run: |
