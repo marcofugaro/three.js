@@ -1,0 +1,78 @@
+name: Report size
+
+on:
+  workflow_run:
+    workflows: ["Read size"]
+    types:
+      - completed
+
+# This workflow needs to be run with "pull-requests: write" permissions to
+# be able to comment on the pull request. We can't checkout the PR code
+# in this workflow.
+# Reference:
+# https://securitylab.github.com/research/github-actions-preventing-pwn-requests/
+permissions:
+  pull-requests: write
+
+jobs:
+  treeshaking:
+    name: Tree-shaking
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
+    steps:
+      - name: Dump GitHub context
+        env:
+          GITHUB_CONTEXT: ${{ toJson(github) }}
+        run: echo "$GITHUB_CONTEXT"
+      - name: Checkout base branch
+        uses: actions/checkout@v3
+        with:
+          # TODO these are not correct
+          ref: ${{ github.event.pull_request.base.ref }}
+          repository: ${{ github.event.pull_request.base.repo.full_name }}
+      - name: Install Node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+          cache: 'npm'
+      - name: Install dependencies
+        run: npm ci
+      - name: Build
+        run: npm run build-module
+      - name: === Test tree-shaking ===
+        run: npm run test-treeshake
+      - name: Read tree-shaken size
+        id: read-size-base
+        run: |
+          FILESIZE_BASE=$(stat --format=%s test/treeshake/index.bundle.min.js)
+          echo "FILESIZE_BASE=$FILESIZE_BASE" >> $GITHUB_OUTPUT
+      - name: Format
+        id: format
+        run: |
+          FILESIZE=$(node ./test/treeshake/format-size.js ${{ steps.read-size.outputs.FILESIZE }})
+          FILESIZE_GZIP=$(node ./test/treeshake/format-size.js ${{ steps.read-size.outputs.FILESIZE_GZIP }})
+          FILESIZE_DIFF=$(node ./test/treeshake/format-diff.js ${{ steps.read-size.outputs.FILESIZE }} ${{ steps.read-size-base.outputs.FILESIZE_BASE }})
+          echo "FILESIZE=$FILESIZE" >> $GITHUB_OUTPUT
+          echo "FILESIZE_GZIP=$FILESIZE_GZIP" >> $GITHUB_OUTPUT
+          echo "FILESIZE_DIFF=$FILESIZE_DIFF" >> $GITHUB_OUTPUT
+
+      - name: Find existing comment
+        uses: peter-evans/find-comment@v2
+        id: find-comment
+        with:
+          # TODO these are not correct
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: Bundle size
+      - name: Comment on PR
+        uses: peter-evans/create-or-update-comment@v2
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-id: ${{ steps.find-comment.outputs.comment-id }}
+          edit-mode: replace
+          body: |
+            ### 📦 Bundle size after tree-shaking
+            | Filesize | Gzipped | Diff |
+            |----------|---------|------|
+            | ${{ steps.format.outputs.FILESIZE }} | ${{ steps.format.outputs.FILESIZE_GZIP }} | ${{ steps.format.outputs.FILESIZE_DIFF }} |
