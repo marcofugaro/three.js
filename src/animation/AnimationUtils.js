@@ -360,7 +360,7 @@ const AnimationUtils = {
 	makeClipAdditive: makeClipAdditive
 };
 
-console.log( AnimationUtils );
+console.log( 'yooooooooooooooooooooooooooooooooooooooooooooooooo' );
 
 export {
 	arraySlice,

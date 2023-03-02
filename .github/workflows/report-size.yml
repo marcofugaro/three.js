@@ -90,4 +90,4 @@ jobs:
             ### 📦 Bundle size after tree-shaking
             | Filesize | Gzipped | Diff |
             |----------|---------|------|
-            | ${{ steps.format.outputs.FILESIZE }} | ${{ steps.format.outputs.FILESIZE_GZIP }} | ${{ steps.format.outputs.FILESIZE_DIFF }}% |
+            | ${{ steps.format.outputs.FILESIZE }} | ${{ steps.format.outputs.FILESIZE_GZIP }} | ${{ steps.format.outputs.FILESIZE_DIFF }} |

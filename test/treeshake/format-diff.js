@@ -6,4 +6,4 @@ const filesizeBase = Number( process.argv[ 3 ] );
 const diff = ( filesize - filesizeBase ) * 100 / filesizeBase;
 const formatted = `${diff >= 0 ? '+' : ''}${diff.toFixed( 1 )}%`;
 
-process.stdout.write( formatted );
+console.log( formatted );
