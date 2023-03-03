@@ -360,6 +360,8 @@ const AnimationUtils = {
 	makeClipAdditive: makeClipAdditive
 };
 
+console.log( AnimationUtils );
+
 export {
 	arraySlice,
 	convertArray,
