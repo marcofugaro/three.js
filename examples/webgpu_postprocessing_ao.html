@@ -60,9 +60,9 @@
 
 			const params = {
 				scene: 'bedroom',
-				samples: 16,
-				radius: 0.25,
-				scale: 1,
+				samples: 8,
+				radius: 0.5,
+				scale: 0.8,
 				thickness: 1,
 				aoOnly: false,
 				transparentOpacity: 0.3
@@ -93,6 +93,7 @@
 				scene = new THREE.Scene();
 
 				renderer = new THREE.WebGPURenderer();
+				renderer.toneMapping = THREE.AgXToneMapping;
 				renderer.setPixelRatio( window.devicePixelRatio );
 				renderer.setSize( window.innerWidth, window.innerHeight );
 				renderer.setAnimationLoop( animate );
