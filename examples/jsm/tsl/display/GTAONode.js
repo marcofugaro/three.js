@@ -1,5 +1,5 @@
-import { DataTexture, RenderTarget, RepeatWrapping, Vector2, Vector3, TempNode, QuadMesh, NodeMaterial, RendererUtils, RedFormat, FloatType, NearestFilter } from 'three/webgpu';
-import { reference, logarithmicDepthToViewZ, viewZToPerspectiveDepth, getNormalFromDepth, getScreenPosition, getViewPosition, nodeObject, Fn, float, NodeUpdateType, uv, uniform, Loop, vec2, vec3, vec4, int, dot, max, min, pow, abs, If, textureSize, sin, cos, PI, texture, passTexture, mat3, add, normalize, mul, cross, mix, acos, clamp } from 'three/tsl';
+import { RenderTarget, Vector2, TempNode, QuadMesh, NodeMaterial, RendererUtils, RedFormat, FloatType, NearestFilter } from 'three/webgpu';
+import { reference, logarithmicDepthToViewZ, viewZToPerspectiveDepth, getNormalFromDepth, getScreenPosition, getViewPosition, nodeObject, Fn, float, NodeUpdateType, uv, uniform, Loop, vec2, vec3, vec4, int, dot, max, min, pow, abs, If, sin, cos, PI, texture, passTexture, add, normalize, mul, cross, mix, acos, clamp, interleavedGradientNoise, screenCoordinate } from 'three/tsl';
 
 const _quadMesh = /*@__PURE__*/ new QuadMesh();
 const _size = /*@__PURE__*/ new Vector2();
@@ -184,14 +184,6 @@ class GTAONode extends TempNode {
 		 * @default false
 		 */
 		this.useTemporalFiltering = false;
-
-		/**
-		 * The node represents the internal noise texture used by the AO.
-		 *
-		 * @private
-		 * @type {TextureNode}
-		 */
-		this._noiseNode = texture( generateMagicSquareNoise() );
 
 		/**
 		 * Represents the projection matrix of the scene's camera.
@@ -420,7 +412,6 @@ class GTAONode extends TempNode {
 
 		};
 
-		const sampleNoise = ( uv ) => this._noiseNode.sample( uv );
 		const sampleNormal = ( uv ) => ( normalSourceNode !== null )
 			? normalSourceNode.sample( uv ).rgb.normalize()
 			: getNormalFromDepth( uv, fallbackDepthForNormal, this._cameraProjectionMatrixInverse );
@@ -436,15 +427,16 @@ class GTAONode extends TempNode {
 
 			const radiusToUse = this.radius;
 
-			const noiseResolution = textureSize( this._noiseNode, 0 );
-			let noiseUv = vec2( uvNode.x, uvNode.y.oneMinus() );
-			noiseUv = noiseUv.mul( this.resolution.div( noiseResolution ) );
-
-			const noiseTexel = sampleNoise( noiseUv );
-			const randomVec = noiseTexel.xyz.mul( 2.0 ).sub( 1.0 );
-			const tangent = vec3( randomVec.xy, 0.0 ).normalize();
-			const bitangent = vec3( tangent.y.mul( - 1.0 ), tangent.x, 0.0 );
-			const kernelMatrix = mat3( tangent, bitangent, vec3( 0.0, 0.0, 1.0 ) );
+			// Two decorrelated interleaved-gradient-noise samples drive the spatio-temporal
+			// jitter: `sliceRot` rotates the slice azimuth per-pixel, `stepJitter` shifts the
+			// step phase per-pixel. IGN's low discrepancy gives evenly distributed samples
+			// without a noise texture lookup. The constant offset on the second call
+			// decorrelates it from the first.
+			// (Jimenez, "Next Generation Post Processing in Call of Duty: Advanced Warfare".)
+			const noise1 = interleavedGradientNoise( screenCoordinate.xy ).toVar();
+			const noise2 = interleavedGradientNoise( screenCoordinate.xy.add( vec2( 17, 23 ) ) ).toVar();
+			const sliceRot = noise1.mul( PI ).toVar();
+			const stepJitter = mul( 0.5, noise2 ).toVar();
 
 			const DIRECTIONS = this.samples.lessThan( 30 ).select( 3, 5 ).toVar();
 			const STEPS = add( this.samples, DIRECTIONS.sub( 1 ) ).div( DIRECTIONS ).toVar();
@@ -453,15 +445,10 @@ class GTAONode extends TempNode {
 
 			// Each iteration analyzes one vertical "slice" of the 3D space around the fragment.
 
-			// Per-step phase jitter for spatio-temporal decorrelation.
-			// (Activision GTAO slides 86, 92–93 "Noise Distribution".)
-			const stepJitter = mul( 0.5, noiseTexel.w ).toVar();
-
 			Loop( { start: int( 0 ), end: DIRECTIONS, type: 'int', condition: '<' }, ( { i } ) => {
 
-				const angle = float( i ).div( float( DIRECTIONS ) ).mul( PI ).add( this._temporalDirection ).toVar();
+				const angle = float( i ).div( float( DIRECTIONS ) ).mul( PI ).add( this._temporalDirection ).add( sliceRot ).toVar();
 				const sampleDir = vec3( cos( angle ), sin( angle ), 0 ).toVar();
-				sampleDir.assign( normalize( kernelMatrix.mul( sampleDir ) ) );
 
 				const viewDir = normalize( viewPosition.xyz.negate() ).toVar();
 				const sliceBitangent = normalize( cross( sampleDir, viewDir ) ).toVar();
@@ -628,102 +615,6 @@ class GTAONode extends TempNode {
 }
 
 export default GTAONode;
-
-/**
- * Generates the AO's noise texture for the given size.
- *
- * @param {number} [size=5] - The noise size.
- * @return {DataTexture} The generated noise texture.
- */
-function generateMagicSquareNoise( size = 5 ) {
-
-	const noiseSize = Math.floor( size ) % 2 === 0 ? Math.floor( size ) + 1 : Math.floor( size );
-	const magicSquare = generateMagicSquare( noiseSize );
-	const noiseSquareSize = magicSquare.length;
-	const data = new Uint8Array( noiseSquareSize * 4 );
-
-	for ( let inx = 0; inx < noiseSquareSize; ++ inx ) {
-
-		const iAng = magicSquare[ inx ];
-		const angle = ( 2 * Math.PI * iAng ) / noiseSquareSize;
-		const randomVec = new Vector3(
-			Math.cos( angle ),
-			Math.sin( angle ),
-			0
-		).normalize();
-		data[ inx * 4 ] = ( randomVec.x * 0.5 + 0.5 ) * 255;
-		data[ inx * 4 + 1 ] = ( randomVec.y * 0.5 + 0.5 ) * 255;
-		data[ inx * 4 + 2 ] = 127;
-		data[ inx * 4 + 3 ] = 255;
-
-	}
-
-	const noiseTexture = new DataTexture( data, noiseSize, noiseSize );
-	noiseTexture.wrapS = RepeatWrapping;
-	noiseTexture.wrapT = RepeatWrapping;
-	noiseTexture.needsUpdate = true;
-
-	return noiseTexture;
-
-}
-
-/**
- * Computes an array of magic square values required to generate the noise texture.
- *
- * @param {number} size - The noise size.
- * @return {Array<number>} The magic square values.
- */
-function generateMagicSquare( size ) {
-
-	const noiseSize = Math.floor( size ) % 2 === 0 ? Math.floor( size ) + 1 : Math.floor( size );
-	const noiseSquareSize = noiseSize * noiseSize;
-	const magicSquare = Array( noiseSquareSize ).fill( 0 );
-	let i = Math.floor( noiseSize / 2 );
-	let j = noiseSize - 1;
-
-	for ( let num = 1; num <= noiseSquareSize; ) {
-
-		if ( i === - 1 && j === noiseSize ) {
-
-			j = noiseSize - 2;
-			i = 0;
-
-		} else {
-
-			if ( j === noiseSize ) {
-
-				j = 0;
-
-			}
-
-			if ( i < 0 ) {
-
-				i = noiseSize - 1;
-
-			}
-
-		}
-
-		if ( magicSquare[ i * noiseSize + j ] !== 0 ) {
-
-			j -= 2;
-			i ++;
-			continue;
-
-		} else {
-
-			magicSquare[ i * noiseSize + j ] = num ++;
-
-		}
-
-		j ++;
-		i --;
-
-	}
-
-	return magicSquare;
-
-}
 
 /**
  * TSL function for creating a Ground Truth Ambient Occlusion (GTAO) effect.
