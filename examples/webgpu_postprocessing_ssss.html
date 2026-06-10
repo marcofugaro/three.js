@@ -182,6 +182,7 @@
 				subsurfaceScatteringPass.samples.value = 32;
 				subsurfaceScatteringPass.resolutionScale = 0.5; // running the blur at half the tap count is often sufficient
 				subsurfaceScatteringPass.jitter = true; // jitter the noise so TRAA can resolve it
+				subsurfaceScatteringPass.noiseMode.value = 0; // 0 = white noise, 1 = IGN, 2 = blue noise; toggle in the GUI to compare
 
 				const traaPass = traa( subsurfaceScatteringPass.getTextureNode(), scenePassDepth, scenePassVelocity, camera );
 
@@ -208,6 +209,11 @@
 				} ).name( 'output' );
 				gui.add( subsurfaceScatteringPass.samples, 'value', 4, 64, 1 ).name( 'samples' );
 				gui.add( subsurfaceScatteringPass, 'jitter' ).name( 'jitter' );
+				gui.add( subsurfaceScatteringPass.noiseMode, 'value', {
+					'White Noise': 0,
+					'IGN': 1,
+					'Blue Noise (STBN approx)': 2,
+				} ).name( 'noise' );
 
 				const texturingModeOptions = {
 					'Post-Scatter': TEXTURING_MODE.POST_SCATTER,

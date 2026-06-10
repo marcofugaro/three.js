@@ -1,5 +1,5 @@
 import { RenderTarget, HalfFloatType, TempNode, QuadMesh, NodeMaterial, RendererUtils, Vector2, Vector3, Vector4, Color, DataTexture, RGBAFormat, FloatType, RepeatWrapping, NearestFilter } from 'three/webgpu';
-import { Fn, float, vec2, vec3, vec4, int, uv, uniform, uniformArray, Loop, texture, passTexture, NodeUpdateType, If, abs, max, min, exp, sqrt, pow, mix, dot, cross, normalize, clamp, fract, cos, sin, screenCoordinate } from 'three/tsl';
+import { Fn, float, vec2, vec3, vec4, int, uv, uniform, uniformArray, Loop, texture, passTexture, NodeUpdateType, If, abs, max, min, exp, sqrt, pow, mix, dot, cross, normalize, clamp, fract, cos, sin, screenCoordinate, interleavedGradientNoise } from 'three/tsl';
 
 const _quadMesh = /*@__PURE__*/ new QuadMesh();
 const _size = /*@__PURE__*/ new Vector2();
@@ -74,10 +74,10 @@ function _precomputeSamples( numSamples ) {
  * in every channel. The value seeds the per-pixel rotation of the sample disk,
  * breaking up structured blur patterns.
  *
- * Animating the value over time with a golden-ratio value offset (see
- * {@link SSSSNode#jitter}) gives each pixel a low-discrepancy temporal sequence, so a
- * temporal resolve (`TRAANode`) accumulates it into a clean image over successive
- * frames while allowing a reduced tap count.
+ * White noise has a flat power spectrum (energy at all frequencies, including the
+ * low frequencies the eye is most sensitive to), so it looks the noisiest of the
+ * available {@link SSSSNode#noiseMode} sources. Kept as a baseline for comparison;
+ * prefer Interleaved Gradient Noise or the blue-noise mask.
  *
  * @param {number} [size=64] - Width and height of the square texture in texels.
  * @returns {DataTexture} RGBA Float texture with the scalar replicated across channels.
@@ -89,6 +89,165 @@ function _generateWhiteNoiseTexture( size = 64 ) {
 	for ( let i = 0; i < size * size; i ++ ) {
 
 		const v = Math.random();
+		data[ i * 4 ] = v;
+		data[ i * 4 + 1 ] = v;
+		data[ i * 4 + 2 ] = v;
+		data[ i * 4 + 3 ] = 1;
+
+	}
+
+	const tex = new DataTexture( data, size, size, RGBAFormat, FloatType );
+	tex.wrapS = RepeatWrapping;
+	tex.wrapT = RepeatWrapping;
+	tex.minFilter = NearestFilter;
+	tex.magFilter = NearestFilter;
+	tex.needsUpdate = true;
+	return tex;
+
+}
+
+/**
+ * Generates a tiling blue-noise mask via the void-and-cluster method
+ * [Ulichney 1993]. Each texel holds a scalar rank in `[0, 1)` (replicated across
+ * channels) that seeds the per-pixel rotation of the sample disk.
+ *
+ * Unlike white noise, a blue-noise mask has no low-frequency energy: the residual
+ * sampling error is pushed to high frequencies the eye filters out, so it looks
+ * dramatically cleaner at the same tap count — especially at low
+ * {@link SSSSNode#resolutionScale}. Animated over time with a golden-ratio value
+ * offset (see {@link SSSSNode#jitter}) it also stays well distributed per pixel
+ * across frames, which is the lightweight stand-in for spatiotemporal blue noise
+ * used here so a temporal resolve (`TRAANode`) converges quickly and stably.
+ *
+ * References:
+ * - {@link https://cv.ulichney.com/papers/1993-void-cluster.pdf}
+ * - {@link https://blog.demofox.org/2019/06/25/generating-blue-noise-textures-with-void-and-cluster/}
+ *
+ * @param {number} [size=64] - Width and height of the square texture in texels.
+ * @returns {DataTexture} RGBA Float texture with the scalar rank replicated across channels.
+ */
+function _generateBlueNoiseTexture( size = 64 ) {
+
+	const N = size * size;
+	const sigma = 1.9; // Gaussian width controlling the blue-noise frequency [Ulichney].
+	const twoSigma2 = 2 * sigma * sigma;
+	const radius = Math.ceil( 3 * sigma ); // truncate the kernel at 3σ.
+
+	const energy = new Float32Array( N );
+	const pattern = new Uint8Array( N );
+
+	// Splat a toroidal (wrap-around) Gaussian of the given sign at texel `p`.
+	const splat = ( p, weight ) => {
+
+		const px = p % size;
+		const py = ( p / size ) | 0;
+
+		for ( let dy = - radius; dy <= radius; dy ++ ) {
+
+			const y = ( py + dy + size ) % size;
+
+			for ( let dx = - radius; dx <= radius; dx ++ ) {
+
+				const x = ( px + dx + size ) % size;
+				energy[ y * size + x ] += weight * Math.exp( - ( dx * dx + dy * dy ) / twoSigma2 );
+
+			}
+
+		}
+
+	};
+
+	// Index of the tightest cluster (max energy) or largest void (min energy)
+	// among texels currently equal to `value`.
+	const findExtreme = ( value, wantMax ) => {
+
+		let best = - 1;
+		let bestEnergy = wantMax ? - Infinity : Infinity;
+
+		for ( let i = 0; i < N; i ++ ) {
+
+			if ( pattern[ i ] !== value ) continue;
+			const e = energy[ i ];
+			if ( wantMax ? e > bestEnergy : e < bestEnergy ) {
+
+				bestEnergy = e;
+				best = i;
+
+			}
+
+		}
+
+		return best;
+
+	};
+
+	// Initial binary pattern: scatter ~10% ones, then relax by repeatedly moving the
+	// tightest cluster into the largest void until the two coincide (stable).
+	const ones = Math.max( 1, Math.round( N * 0.1 ) );
+	for ( let placed = 0; placed < ones; ) {
+
+		const p = ( Math.random() * N ) | 0;
+		if ( pattern[ p ] === 0 ) {
+
+			pattern[ p ] = 1;
+			splat( p, 1 );
+			placed ++;
+
+		}
+
+	}
+
+	for ( let iter = 0; iter < N; iter ++ ) {
+
+		const cluster = findExtreme( 1, true );
+		pattern[ cluster ] = 0; splat( cluster, - 1 );
+		const voidIdx = findExtreme( 0, false );
+		pattern[ voidIdx ] = 1; splat( voidIdx, 1 );
+		if ( voidIdx === cluster ) break;
+
+	}
+
+	const dither = new Float32Array( N );
+	const prototype = pattern.slice();
+	const prototypeEnergy = energy.slice();
+
+	// Phase 1: rank the prototype's ones by removing the tightest cluster each step.
+	for ( let rank = ones - 1; rank >= 0; rank -- ) {
+
+		const cluster = findExtreme( 1, true );
+		pattern[ cluster ] = 0; splat( cluster, - 1 );
+		dither[ cluster ] = rank;
+
+	}
+
+	// Phase 2: restore the prototype, then fill the largest void each step up to half full.
+	pattern.set( prototype );
+	energy.set( prototypeEnergy );
+	const half = ( N + 1 ) >> 1;
+	for ( let rank = ones; rank < half; rank ++ ) {
+
+		const voidIdx = findExtreme( 0, false );
+		pattern[ voidIdx ] = 1; splat( voidIdx, 1 );
+		dither[ voidIdx ] = rank;
+
+	}
+
+	// Phase 3: past half full the zeros are the minority. Rebuild the energy field from
+	// the zeros and rank the remaining texels by removing the tightest cluster of zeros.
+	energy.fill( 0 );
+	for ( let i = 0; i < N; i ++ ) if ( pattern[ i ] === 0 ) splat( i, 1 );
+	for ( let rank = half; rank < N; rank ++ ) {
+
+		const cluster = findExtreme( 0, true );
+		pattern[ cluster ] = 1; splat( cluster, - 1 );
+		dither[ cluster ] = rank;
+
+	}
+
+	const data = new Float32Array( N * 4 );
+	for ( let i = 0; i < N; i ++ ) {
+
+		const v = ( dither[ i ] + 0.5 ) / N;
 		data[ i * 4 ] = v;
 		data[ i * 4 + 1 ] = v;
 		data[ i * 4 + 2 ] = v;
@@ -197,6 +356,17 @@ class SSSSNode extends TempNode {
 		 * @default 0
 		 */
 		this.outputMode = uniform( 0 );
+
+		/**
+		 * Per-pixel rotation noise source: 0 = white noise, 1 = Interleaved Gradient
+		 * Noise (texture-free, low discrepancy), 2 = blue-noise mask. IGN and blue noise
+		 * have no low-frequency energy, so they look cleaner than white noise at low
+		 * {@link SSSSNode#resolutionScale} and pair well with {@link SSSSNode#jitter}.
+		 *
+		 * @type {UniformNode<int>}
+		 * @default 1
+		 */
+		this.noiseMode = uniform( 1 );
 
 		/**
 		 * Fog type: 0 = none, 1 = linear (`THREE.Fog`), 2 = exp2 (`THREE.FogExp2`).
@@ -377,12 +547,20 @@ class SSSSNode extends TempNode {
 		this._maxR = allSamples[ _MAX_SAMPLES - 1 ].z;
 
 		/**
-		 * White-noise rotation seed.
+		 * White-noise rotation seed (baseline noise source, {@link SSSSNode#noiseMode} 0).
 		 *
 		 * @private
 		 * @type {TextureNode}
 		 */
 		this._noiseNode = texture( _generateWhiteNoiseTexture() );
+
+		/**
+		 * Blue-noise rotation seed ({@link SSSSNode#noiseMode} 2).
+		 *
+		 * @private
+		 * @type {TextureNode}
+		 */
+		this._blueNoiseNode = texture( _generateBlueNoiseTexture() );
 
 		/**
 		 * @private
@@ -631,10 +809,10 @@ class SSSSNode extends TempNode {
 
 		const { colorNode, depthNode, albedoNode, normalNode } = this;
 		const sssBuffer = this._sssBuffer;
-		const { outputMode } = this;
+		const { outputMode, noiseMode } = this;
 		const { fogType, fogNear, fogFar, fogDensity } = this;
 		const fogColorUniform = this.fogColor;
-		const { _projScale, _cameraNear, _resolution, _cameraProjectionMatrix, _projDepthParams, _projScaleXY, _samplesU, _noiseNode, _temporalNoiseOffset, _effectiveSamples, _sampleStride } = this;
+		const { _projScale, _cameraNear, _resolution, _cameraProjectionMatrix, _projDepthParams, _projScaleXY, _samplesU, _noiseNode, _blueNoiseNode, _temporalNoiseOffset, _effectiveSamples, _sampleStride } = this;
 		const maxR = this._maxR;
 
 		const sampleColor = ( uvCoord ) => colorNode.sample( uvCoord );
@@ -712,8 +890,17 @@ class SSSSNode extends TempNode {
 					const clampedRadius = min( screenRadius, effectiveMaxRadius ).toVar();
 					const radiusScale = clampedRadius.div( float( maxR ) ).toVar();
 
-					// Per-pixel white-noise rotation seed in [0,1), tiling every 64 px at full resolution.
-					const base01 = _noiseNode.sample( screenCoordinate.xy.div( 64.0 ) ).r.toVar();
+					// Per-pixel rotation seed in [0,1), chosen by `noiseMode`. The white- and
+					// blue-noise masks tile every 64 px at full resolution; IGN is procedural.
+					const noiseCoord = screenCoordinate.xy.toVar();
+					const noiseTexUV = noiseCoord.div( 64.0 );
+					const whiteBase = _noiseNode.sample( noiseTexUV ).r;
+					const blueBase = _blueNoiseNode.sample( noiseTexUV ).r;
+					const ignBase = interleavedGradientNoise( noiseCoord );
+					const base01 = noiseMode.greaterThan( 1.5 ).select(
+						blueBase,
+						noiseMode.greaterThan( 0.5 ).select( ignBase, whiteBase ),
+					).toVar();
 
 					// Advance the seed along a golden-ratio low-discrepancy sequence each frame
 					// (offset is 0 unless `jitter` is enabled) so a temporal resolve accumulates
