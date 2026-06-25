@@ -586,7 +586,8 @@
 				aoGui.add( params, 'thickness', 0.01, 2 ).onChange( updateParameters );
 				aoGui.add( params, 'resolution', 0.25, 1, 0.25 ).name( 'AO resolution' ).onChange( ( v ) => aoPass.resolutionScale = v );
 				aoGui.add( aoPass, 'jitter' ).name( 'jitter' );
-				aoGui.add( params, 'aoDenoiser', [ 'none', '1 channel temporal accumulation', 'TemporalReprojectNode', 'RecurrentDenoise + TemporalReprojectNode' ] ).name( 'AO denoiser' ).onChange( applyAODenoiser );
+				aoGui.add( aoPass.noiseType, 'value', { 'blue noise': 0, 'interleaved gradient noise': 1 } ).name( 'noise type' );
+				aoGui.add( params, 'aoDenoiser', [ 'none', '1 channel temporal accumulation', 'TemporalReprojectNode', 'TemporalReprojectNode + RecurrentDenoise' ] ).name( 'AO denoiser' ).onChange( applyAODenoiser );
 
 				const accumulationGui = renderer.inspector.createParameters( '1 channel temporal accumulation' );
 				accumulationGui.add( aoPass.temporalAccumulationAlpha, 'value', 0.02, 1, 0.01 ).name( 'accumulation alpha' );

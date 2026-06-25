@@ -1,5 +1,5 @@
 import { RenderTarget, Vector2, TempNode, QuadMesh, NodeMaterial, RendererUtils, RedFormat, LinearFilter } from 'three/webgpu';
-import { reference, logarithmicDepthToViewZ, viewZToPerspectiveDepth, getNormalFromDepth, getScreenPosition, getViewPosition, nodeObject, Fn, float, NodeUpdateType, uv, uniform, Loop, vec2, vec3, vec4, int, dot, max, min, pow, abs, If, textureSize, sin, cos, PI, texture, passTexture, mat3, add, normalize, cross, mix, acos, clamp, fract } from 'three/tsl';
+import { reference, logarithmicDepthToViewZ, viewZToPerspectiveDepth, getNormalFromDepth, getScreenPosition, getViewPosition, nodeObject, Fn, float, NodeUpdateType, uv, uniform, Loop, vec2, vec3, vec4, int, dot, max, min, pow, abs, If, textureSize, sin, cos, PI, texture, passTexture, mat3, add, normalize, cross, mix, acos, clamp, fract, interleavedGradientNoise } from 'three/tsl';
 import { generateBlueNoiseTexture } from '../../math/BlueNoise.js';
 
 const _quadMesh = /*@__PURE__*/ new QuadMesh();
@@ -222,6 +222,18 @@ class GTAONode extends TempNode {
 		 * @type {UniformNode<float>}
 		 */
 		this.temporalAccumulationAlpha = uniform( 0.1 );
+
+		/**
+		 * Selects the noise pattern used for the slice rotation and per-step jitter:
+		 * `0` samples the tiled blue-noise texture ({@link GTAONode#_noiseNode}), `1`
+		 * uses procedural interleaved gradient noise computed from the pixel
+		 * coordinate (no texture fetch). Intermediate values blend the two. Both are
+		 * scrolled per frame by {@link GTAONode#jitter} for temporal accumulation.
+		 *
+		 * @type {UniformNode<float>}
+		 * @default 0
+		 */
+		this.noiseType = uniform( 0 );
 
 		/**
 		 * Blue-noise texture sampled for the slice rotation and step jitter.
@@ -477,8 +489,18 @@ class GTAONode extends TempNode {
 			// successive frames are maximally decorrelated for the temporal
 			// accumulator while every frame keeps its blue-noise spectrum.
 			const noiseSample = sampleNoise( noiseUv );
-			const noise1 = fract( noiseSample.r.add( this._jitterOffset.x ) );
-			const noise2 = fract( noiseSample.g.add( this._jitterOffset.y ) );
+
+			// Procedural alternative to the blue-noise texture: interleaved gradient
+			// noise (Jimenez 2014) evaluated straight from the pixel coordinate. A
+			// constant offset on the second lookup decorrelates the rotation/jitter
+			// pair. `noiseType` blends between the two so the pattern can be switched
+			// live; the R2 jitter scroll is applied to both the same way.
+			const pixelCoord = uvNode.mul( this.resolution );
+			const ign1 = interleavedGradientNoise( pixelCoord );
+			const ign2 = interleavedGradientNoise( pixelCoord.add( vec2( 23.0, 59.0 ) ) );
+
+			const noise1 = fract( mix( noiseSample.r, ign1, this.noiseType ).add( this._jitterOffset.x ) );
+			const noise2 = fract( mix( noiseSample.g, ign2, this.noiseType ).add( this._jitterOffset.y ) );
 
 			// Random tangent direction from noise1, used to rotate the per-slice azimuth.
 			const tangentAngle = noise1.mul( PI ).mul( 2.0 );
