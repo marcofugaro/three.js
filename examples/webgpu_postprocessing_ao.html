@@ -42,6 +42,8 @@
 			import { sample, pass, mrt, screenUV, normalView, velocity, vec3, vec4, packNormalToRGB, unpackRGBToNormal, colorSpaceToWorking, builtinAOContext } from 'three/tsl';
 			import { ao } from 'three/addons/tsl/display/GTAONode.js';
 			import { traa } from 'three/addons/tsl/display/TRAANode.js';
+			import { temporalReproject } from 'three/addons/tsl/display/TemporalReprojectNode.js';
+			import { recurrentDenoise } from 'three/addons/tsl/display/RecurrentDenoiseNode.js';
 
 			import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 			import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
@@ -53,15 +55,17 @@
 
 			let camera, scene, renderer, renderPipeline, controls;
 
-			let aoPass, traaPass, transparentMesh;
+			let aoPass, traaPass, transparentMesh, aoReproject, aoDenoise, applyAODenoiser;
 
 			const params = {
 				samples: 14,
 				radius: 0.5,
 				scale: 0.8,
 				thickness: 1,
+				resolution: 0.5,
 				aoOnly: false,
-				transparentOpacity: 0.3
+				transparentOpacity: 0.3,
+				aoDenoiser: 'none'
 			};
 
 			init();
@@ -138,21 +142,101 @@
 				// ao
 
 				aoPass = ao( prePassDepth, prePassNormal, camera, prePassVelocity ).toInspector( 'GTAO', ( inspectNode ) => inspectNode.r );
-				aoPass.resolutionScale = 0.5; // running AO in half resolution is often sufficient
-				aoPass.temporalAccumulation = true; // accumulate AO over frames to remove half-res blue-noise
+				aoPass.resolutionScale = params.resolution; // AO render resolution; see the 'AO resolution' GUI control
 
-				const aoPassOutput = aoPass.getTextureNode();
+				// Alternative AO denoiser for A/B comparison: the full SSGI/SSR temporal chain on
+				// the *raw* (un-accumulated) AO instead of GTAO's built-in accumulation.
+				// TemporalReprojectNode only reprojects + validates history and writes a frame count
+				// into alpha; RecurrentDenoiseNode is the consumer that actually averages the current
+				// sample into history ( mix( history, current, 1 / frameCount ) ) and feeds the result
+				// back — so both are required, the reproject node alone does not reduce noise. Both
+				// want the PACKED normal texture ( they unpack internally ), unlike prePassNormal
+				// which ao() consumes already unpacked.
+				const packedNormal = prePass.getTextureNode(); // = packNormalToRGB( normalView )
 
-				// scene context
+				aoReproject = temporalReproject(
+					aoPass.getTextureNode(),
+					prePassDepth,
+					packedNormal,
+					prePassVelocity,
+					camera,
+					{ mode: 'ao', accumulate: false } // accumulate / history are reconfigured per GUI mode in applyAODenoiser
+				);
 
-				scenePass.contextNode = builtinAOContext( aoPassOutput.sample( screenUV ).r );
+				aoDenoise = recurrentDenoise( aoReproject, camera, {
+					depth: prePassDepth,
+					normal: packedNormal,
+					raw: aoPass.getTextureNode(), // current AO, blended into history by the frame count
+					mode: 'ao',
+					accumulate: true
+				} );
+				aoDenoise.alphaSource = 'none'; // AO rides in .r, not in alpha
+
+				// Scheduling: the active AO node is sampled through scenePass.contextNode ( or the output
+				// graph in AO-only mode ), which schedules its pass; that pass then pulls its inputs via
+				// updateBefore. RecurrentDenoiseNode pulls TemporalReprojectNode, which ( with the matching
+				// fix in TemporalReprojectNode ) pulls the GTAO pass, so the chain renders in order and
+				// only while its mode is active — no inspector tag forces it to run in other modes.
+
+				// Match the built-in accumulation's temporal window: it blends the current frame at
+				// temporalAccumulationAlpha ( 0.1 ), i.e. a steady-state weight of ~1/10, which the
+				// cumulative-average chain matches with a frame-count cap of 10.
+				aoReproject.maxFrames.value = 10;
+				aoDenoise.maxFrames.value = 10;
 
 				// final output + traa
 
 				traaPass = traa( scenePass, prePassDepth, prePassVelocity, camera );
 				traaPass.useSubpixelCorrection = false;
 
-				renderPipeline.outputNode = traaPass;
+				// Selects the active AO denoiser and rebuilds the pipeline. GTAO's own accumulation
+				// runs only for '1 channel temporal accumulation'; the other modes emit the raw AO and
+				// route it through the reproject / denoise chain ( so AO is never filtered twice ):
+				//   'none' → raw, un-accumulated AO
+				//   'TemporalReprojectNode' → reproject stage only ( history validation, no real averaging )
+				//   'RecurrentDenoise + TemporalReprojectNode' → full chain: reproject + spatial/temporal denoise
+				applyAODenoiser = () => {
+
+					const mode = params.aoDenoiser;
+
+					aoPass.temporalAccumulation = mode === '1 channel temporal accumulation';
+
+					// Reproject config per mode: standalone self-accumulation for 'TemporalReprojectNode',
+					// or accumulate:false fed by ( and feeding back from ) the denoiser for the full chain.
+					if ( mode === 'RecurrentDenoise + TemporalReprojectNode' ) {
+
+						aoReproject.accumulate = false;
+						aoReproject.setHistoryTexture( aoDenoise );
+
+					} else {
+
+						aoReproject.accumulate = true;
+						aoReproject.setHistoryTexture( null );
+
+					}
+
+					const aoNode = mode === 'RecurrentDenoise + TemporalReprojectNode' ? aoDenoise
+						: mode === 'TemporalReprojectNode' ? aoReproject
+							: aoPass;
+					const aoOutput = aoNode.getTextureNode().sample( screenUV ).r;
+
+					scenePass.contextNode = builtinAOContext( aoOutput );
+
+					// The scene's materials bind their AO source ( which pass texture they sample ) at
+					// compile time. Reassigning scenePass.contextNode alone does not recompile them — the
+					// pass caches its context keyed on its version — so the scene would keep sampling the
+					// previously-bound AO pass and the new chain would never be scheduled. Bumping the pass
+					// version forces the scene to recompile against the active AO node, which schedules that
+					// node's updateBefore() ( and, through its input pulls, the rest of the chain ). This is
+					// also what makes scheduling mode-aware: only the selected node is sampled, so only it runs.
+					scenePass.needsUpdate = true;
+
+					renderPipeline.outputNode = params.aoOnly ? vec4( vec3( aoOutput ), 1 ) : traaPass;
+					renderPipeline.needsUpdate = true;
+
+				};
+
+				applyAODenoiser();
 
 				// models
 
@@ -495,32 +579,36 @@
 
 				// GUI
 
-				const gui = renderer.inspector.createParameters( 'Settings' );
-				gui.add( params, 'samples', 4, 32, 1 ).onChange( updateParameters );
-				gui.add( params, 'radius', 0.1, 1 ).onChange( updateParameters );
-				gui.add( params, 'scale', 0.01, 1 ).onChange( updateParameters );
-				gui.add( params, 'thickness', 0.01, 2 ).onChange( updateParameters );
-				gui.add( aoPass, 'jitter' ).name( 'jitter' );
-				gui.add( aoPass, 'temporalAccumulation' ).name( 'temporal accumulation' );
-				gui.add( aoPass.temporalAccumulationAlpha, 'value', 0.02, 1, 0.01 ).name( 'accumulation alpha' );
-				gui.add( transparentMesh, 'visible' ).name( 'show transparent mesh' );
-				gui.add( params, 'transparentOpacity', 0, 1, 0.01 ).name( 'transparent opacity' ).onChange( updateParameters );
-				gui.add( params, 'aoOnly' ).onChange( ( value ) => {
+				const aoGui = renderer.inspector.createParameters( 'GTAO' );
+				aoGui.add( params, 'samples', 4, 32, 1 ).onChange( updateParameters );
+				aoGui.add( params, 'radius', 0.1, 1 ).onChange( updateParameters );
+				aoGui.add( params, 'scale', 0.01, 1 ).onChange( updateParameters );
+				aoGui.add( params, 'thickness', 0.01, 2 ).onChange( updateParameters );
+				aoGui.add( params, 'resolution', 0.25, 1, 0.25 ).name( 'AO resolution' ).onChange( ( v ) => aoPass.resolutionScale = v );
+				aoGui.add( aoPass, 'jitter' ).name( 'jitter' );
+				aoGui.add( params, 'aoDenoiser', [ 'none', '1 channel temporal accumulation', 'TemporalReprojectNode', 'RecurrentDenoise + TemporalReprojectNode' ] ).name( 'AO denoiser' ).onChange( applyAODenoiser );
 
-					if ( value === true ) {
+				const accumulationGui = renderer.inspector.createParameters( '1 channel temporal accumulation' );
+				accumulationGui.add( aoPass.temporalAccumulationAlpha, 'value', 0.02, 1, 0.01 ).name( 'accumulation alpha' );
 
-						renderPipeline.outputNode = vec4( vec3( aoPass.r ), 1 );
-						renderer.toneMapping = THREE.NoToneMapping;
+				const temporalReprojectGui = renderer.inspector.createParameters( 'TemporalReprojectNode' );
+				// Shared temporal frame-count cap: bound to the reproject pass ( where the frame count
+				// originates ) and mirrored to the denoise pass so both stay in sync.
+				temporalReprojectGui.add( aoReproject.maxFrames, 'value', 1, 64, 1 ).name( 'max frames' ).onChange( ( v ) => aoDenoise.maxFrames.value = v );
+				// History clamp strength: lower = smoother but more ghosting-tolerant, higher = more responsive.
+				temporalReprojectGui.add( aoReproject.clampIntensity, 'value', 0, 1, 0.01 ).name( 'clamp intensity' );
 
-					} else {
+				const recurrentGui = renderer.inspector.createParameters( 'RecurrentDenoiseNode' );
+				recurrentGui.add( aoDenoise.radius, 'value', 0, 10, 0.5 ).name( 'denoise radius' );
+				recurrentGui.add( aoDenoise.strength, 'value', 0, 1, 0.01 ).name( 'denoise strength' );
 
+				const sceneGui = renderer.inspector.createParameters( 'Scene' );
+				sceneGui.add( transparentMesh, 'visible' ).name( 'show transparent mesh' );
+				sceneGui.add( params, 'transparentOpacity', 0, 1, 0.01 ).name( 'transparent opacity' ).onChange( updateParameters );
+				sceneGui.add( params, 'aoOnly' ).onChange( ( value ) => {
 
-						renderPipeline.outputNode = traaPass;
-						renderer.toneMapping = THREE.NeutralToneMapping;
-
-					}
-
-					renderPipeline.needsUpdate = true;
+					renderer.toneMapping = value ? THREE.NoToneMapping : THREE.NeutralToneMapping;
+					applyAODenoiser();
 
 				} );
 

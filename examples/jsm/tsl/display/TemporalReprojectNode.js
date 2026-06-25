@@ -228,6 +228,48 @@ const applyVarianceClipping = Fn( ( [ historyColor, mean, stdColor, gamma, flick
 
 } );
 
+const aoNeighborhoodStruct = struct( {
+	aoMin: 'float',
+	aoMax: 'float'
+} );
+
+/**
+ * Lean single-channel neighbourhood for `ao` mode: a 3×3 min/max box over the beauty `.r`
+ * channel. Skips the YCoCg colour moments, Karis inverse-luminance dampening and SSR
+ * ray-length / env-probability statistics that {@link collectNeighborhood} computes for
+ * colour — none of which are meaningful for a scalar AO signal. The min/max box matches
+ * the clamp window GTAONode's own temporal accumulator uses.
+ *
+ * @tsl
+ */
+const collectNeighborhoodAO = Fn( ( [ beautyTexture, beautyTexel, inputColor ] ) => {
+
+	const offsets = [
+		[ - 1, - 1 ],
+		[ - 1, 1 ],
+		[ 1, - 1 ],
+		[ 1, 1 ],
+		[ 1, 0 ],
+		[ 0, - 1 ],
+		[ 0, 1 ],
+		[ - 1, 0 ],
+	];
+
+	const aoMin = inputColor.r.toVar();
+	const aoMax = inputColor.r.toVar();
+
+	for ( const [ x, y ] of offsets ) {
+
+		const neighbor = textureLoad( beautyTexture, beautyTexel.add( ivec2( x, y ) ) ).r.max( 0 );
+		aoMin.assign( min( aoMin, neighbor ) );
+		aoMax.assign( max( aoMax, neighbor ) );
+
+	}
+
+	return aoNeighborhoodStruct( aoMin, aoMax );
+
+} );
+
 // History sampling
 
 const bilinearTapStruct = struct( { color: 'vec4', weight: 'float', confidence: 'float' } );
@@ -349,6 +391,124 @@ const sampleHistory4Tap = Fn( ( [
 		maxConf,
 		minConf
 	);
+
+} );
+
+// Single-channel history sampling for `ao` mode. Mirrors sampleBilinearTap / sampleHistory4Tap but
+// carries only the AO scalar ( .r ) and the frame count ( .a ) as a vec2, dropping the two dead
+// colour channels from the 4-tap weighted accumulation. The geometric depth+normal confidence is
+// identical to the colour variant; per-tap confidence outputs are omitted ( only the specular path
+// consumes those ).
+
+const bilinearTapAOStruct = struct( { color: 'vec2', weight: 'float' } );
+
+const sampleBilinearTapAO = Fn( ( [
+	historyTexture,
+	previousDepthNode,
+	previousNormalNode,
+	resolution,
+	previousProjectionMatrixInverse,
+	previousCameraWorldMatrix,
+	previousCameraViewMatrix,
+	tapCoord,
+	bilinearWeight,
+	worldPosition,
+	worldNormal
+] ) => {
+
+	const texel = textureLoad( historyTexture, tapCoord ).max( 0 );
+	const reprojDepth = textureLoad( previousDepthNode, tapCoord ).r;
+	const reprojViewPos = getViewPosition( vec2( tapCoord ).add( 0.5 ).div( resolution ), reprojDepth, previousProjectionMatrixInverse );
+	const reprojWorldPos = previousCameraWorldMatrix.mul( vec4( reprojViewPos, 1.0 ) ).xyz;
+	const reprojWorldNorm = unpackRGBToNormal( textureLoad( previousNormalNode, tapCoord ).rgb ).transformDirection( previousCameraViewMatrix );
+
+	const planeDiff = abs( dot( reprojWorldPos.sub( worldPosition ), worldNormal ) ).toVar();
+	planeDiff.divAssign( abs( reprojViewPos.z ) );
+	const normalConfidence = smoothstep( 0.95, 0.999, reprojWorldNorm.dot( worldNormal ) );
+	const confidence = smoothstep( 0, 0.01, planeDiff ).oneMinus().mul( normalConfidence );
+	const weight = bilinearWeight.mul( confidence );
+
+	// AO scalar ( .r ) + frame count ( .a ) only.
+	return bilinearTapAOStruct( vec2( texel.r, texel.a ).mul( weight ), weight );
+
+} );
+
+/**
+ * @param {Object} ctx - Shared {@link sampleBilinearTapAO} inputs plus `reprojICoord`.
+ * @param {Node<ivec2>} tapOffset
+ * @param {Node<float>} bilinearWeight
+ */
+function bilinearHistoryTapAO( ctx, tapOffset, bilinearWeight ) {
+
+	return sampleBilinearTapAO(
+		ctx.historyTexture,
+		ctx.previousDepthNode,
+		ctx.previousNormalNode,
+		ctx.resolution,
+		ctx.previousProjectionMatrixInverse,
+		ctx.previousCameraWorldMatrix,
+		ctx.previousCameraViewMatrix,
+		ctx.reprojICoord.add( tapOffset ),
+		bilinearWeight,
+		ctx.worldPosition,
+		ctx.worldNormal
+	);
+
+}
+
+/**
+ * Single-channel ( vec2: AO + frame count ) geometrically-weighted 4-tap bilinear history sample.
+ *
+ * @tsl
+ */
+const sampleHistory4TapAO = Fn( ( [
+	historyTexture,
+	previousDepthNode,
+	previousNormalNode,
+	resolution,
+	previousProjectionMatrixInverse,
+	previousCameraWorldMatrix,
+	previousCameraViewMatrix,
+	reprojUV,
+	worldPosition,
+	worldNormal,
+	inputAO
+] ) => {
+
+	const reprojPixelCoord = reprojUV.mul( resolution ).sub( 0.5 ).toVar();
+	const reprojICoord = ivec2( floor( reprojPixelCoord ) );
+	const fCoord = reprojPixelCoord.fract();
+
+	const fx = fCoord.x;
+	const fy = fCoord.y;
+	const f00 = float( 1 ).sub( fx ).mul( float( 1 ).sub( fy ) );
+	const f10 = fx.mul( float( 1 ).sub( fy ) );
+	const f01 = float( 1 ).sub( fx ).mul( fy );
+	const f11 = fx.mul( fy );
+
+	const tapCtx = {
+		historyTexture,
+		previousDepthNode,
+		previousNormalNode,
+		resolution,
+		previousProjectionMatrixInverse,
+		previousCameraWorldMatrix,
+		previousCameraViewMatrix,
+		reprojICoord,
+		worldPosition,
+		worldNormal
+	};
+
+	const tap00 = bilinearHistoryTapAO( tapCtx, ivec2( 0, 0 ), f00 );
+	const tap10 = bilinearHistoryTapAO( tapCtx, ivec2( 1, 0 ), f10 );
+	const tap01 = bilinearHistoryTapAO( tapCtx, ivec2( 0, 1 ), f01 );
+	const tap11 = bilinearHistoryTapAO( tapCtx, ivec2( 1, 1 ), f11 );
+
+	const colorSum = tap00.get( 'color' ).add( tap10.get( 'color' ) ).add( tap01.get( 'color' ) ).add( tap11.get( 'color' ) );
+	const weightSum = tap00.get( 'weight' ).add( tap10.get( 'weight' ) ).add( tap01.get( 'weight' ) ).add( tap11.get( 'weight' ) );
+
+	// vec2( ao, frameCount ); fall back to the current sample with frame count 1 when no tap is confident.
+	return select( weightSum.greaterThan( 0.01 ), colorSum.div( weightSum ), vec2( inputAO, float( 1 ) ) );
 
 } );
 
@@ -487,12 +647,12 @@ const VARIANCE_GAMMA_MIN = 0.5;
 const VARIANCE_GAMMA_MAX = 1;
 
 /**
- * @typedef {'diffuse' | 'specular'} TemporalReprojectMode
+ * @typedef {'diffuse' | 'specular' | 'ao'} TemporalReprojectMode
  */
 
 /**
  * @typedef {Object} TemporalReprojectNodeOptions
- * @property {TemporalReprojectMode} [mode='diffuse'] - `diffuse` for SSGI/scene colour; `specular` for SSR reflections.
+ * @property {TemporalReprojectMode} [mode='diffuse'] - `diffuse` for SSGI/scene colour; `specular` for SSR reflections; `ao` for a single-channel (GTAO) ambient-occlusion scalar carried in `.r`.
  * @property {boolean} [hitPointReprojection] - Parallax hit-point reprojection (specular mode only). Defaults to `true` in specular mode.
  * @property {boolean} [accumulate=false] - When `true`, history is stored in this pass (classic temporal resolve). When `false`,
  * use {@link TemporalReprojectNode#setHistoryTexture} to read history from another pass (e.g. denoise output).
@@ -542,9 +702,9 @@ class TemporalReprojectNode extends TempNode {
 			accumulate = false
 		} = options;
 
-		if ( mode !== 'specular' && mode !== 'diffuse' ) {
+		if ( mode !== 'specular' && mode !== 'diffuse' && mode !== 'ao' ) {
 
-			throw new Error( 'TemporalReprojectNode: `mode` must be `diffuse` or `specular`.' );
+			throw new Error( 'TemporalReprojectNode: `mode` must be `diffuse`, `specular`, or `ao`.' );
 
 		}
 
@@ -657,6 +817,13 @@ class TemporalReprojectNode extends TempNode {
 			this._needsPostProcessingSync = false;
 
 		}
+
+		// Schedule the beauty pass so it renders before this resolve samples it. When this node is
+		// reached only through another node's updateBefore() — e.g. a RecurrentDenoiseNode consuming
+		// it, rather than via the render-pipeline output graph — the beauty pass is otherwise never
+		// scheduled and the resolve would sample a stale/empty target. Mirrors RecurrentDenoiseNode's
+		// input pull. ( Sampling a PassTextureNode does not by itself schedule its producing pass. )
+		if ( this.beautyNode.isPassTextureNode === true ) frame.updateBeforeNode( this.beautyNode.passNode );
 
 		_rendererState = RendererUtils.resetRendererState( renderer, _rendererState );
 
@@ -776,6 +943,7 @@ class TemporalReprojectNode extends TempNode {
 	_buildResolve( builder ) {
 
 		const isSpecular = this.mode === 'specular';
+		const isAO = this.mode === 'ao';
 		const cameraUniforms = this._cameraUniforms;
 
 		const resolve = Fn( () => {
@@ -792,26 +960,43 @@ class TemporalReprojectNode extends TempNode {
 			const inputColor = textureLoad( this.beautyNode, beautyTexel ).max( 0 ).toVar();
 			const viewNormal = unpackRGBToNormal( textureLoad( this.normalNode, screenTexel ).rgb ).toVar();
 
-			// Shared 3×3 beauty fetch: feeds both the variance-clip box and the SSR ray-length stats.
-			const neighborhood = collectNeighborhood( this.beautyNode, beautyTexel, inputColor, this.flickerSuppression );
+			// Neighbourhood gather. `ao` uses a lean scalar min/max box over .r; diffuse/specular use
+			// the full YCoCg colour moments + SSR ray-length stats from a shared 3×3 beauty fetch.
+			const neighborhood = isAO ? null : collectNeighborhood( this.beautyNode, beautyTexel, inputColor, this.flickerSuppression );
+			const aoNeighborhood = isAO ? collectNeighborhoodAO( this.beautyNode, beautyTexel, inputColor ) : null;
 			const worldNormal = viewNormal.transformDirection( cameraUniforms.viewMatrix ).toVar();
 
 			const viewPosition = getViewPosition( uvNode, depth, cameraUniforms.projectionMatrixInverse ).toVar();
 			const worldPosition = cameraUniforms.worldMatrix.mul( vec4( viewPosition, 1.0 ) ).xyz.toVar();
 
-			const sampleHistory = ( reprojUV ) => sampleHistory4Tap(
-				this._historyTextureNode,
-				this._previousDepthNode,
-				this._previousNormalNode,
-				this._resolution,
-				cameraUniforms.previousProjectionMatrixInverse,
-				cameraUniforms.previousWorldMatrix,
-				cameraUniforms.previousViewMatrix,
-				reprojUV,
-				worldPosition,
-				worldNormal,
-				inputColor.rgb
-			);
+			// `ao` samples a lean vec2 ( AO + frame count ) history; diffuse/specular sample the full vec4 colour history.
+			const sampleHistory = ( reprojUV ) => isAO
+				? sampleHistory4TapAO(
+					this._historyTextureNode,
+					this._previousDepthNode,
+					this._previousNormalNode,
+					this._resolution,
+					cameraUniforms.previousProjectionMatrixInverse,
+					cameraUniforms.previousWorldMatrix,
+					cameraUniforms.previousViewMatrix,
+					reprojUV,
+					worldPosition,
+					worldNormal,
+					inputColor.r
+				)
+				: sampleHistory4Tap(
+					this._historyTextureNode,
+					this._previousDepthNode,
+					this._previousNormalNode,
+					this._resolution,
+					cameraUniforms.previousProjectionMatrixInverse,
+					cameraUniforms.previousWorldMatrix,
+					cameraUniforms.previousViewMatrix,
+					reprojUV,
+					worldPosition,
+					worldNormal,
+					inputColor.rgb
+				);
 
 			// Surface-velocity reprojection — the base history for both modes. `historyUV` is
 			// reused below for the stretch guard, so it is computed once here.
@@ -821,7 +1006,8 @@ class TemporalReprojectNode extends TempNode {
 			const historyUV = uvNode.sub( velocityOff ).toVar();
 			const surf = sampleHistory( historyUV );
 
-			const historyColor = surf.get( 'color' ).toVar();
+			// `ao` history is vec2( AO, frameCount ); repack into the shared vec4 ( ao, 0, 0, frameCount ) layout.
+			const historyColor = ( isAO ? vec4( surf.x, 0, 0, surf.y ) : surf.get( 'color' ) ).toVar();
 			const totalConfidence = float( 1 ).toVar();
 			const historyTrust = float( 0 ).toVar();
 
@@ -903,21 +1089,41 @@ class TemporalReprojectNode extends TempNode {
 
 			const varianceGamma = mix( float( VARIANCE_GAMMA_MIN ), float( VARIANCE_GAMMA_MAX ), motionFactor.oneMinus().pow2() );
 
-			const clippedRGB = applyVarianceClipping(
-				historyColor,
-				neighborhood.get( 'mean' ),
-				neighborhood.get( 'stdColor' ),
-				varianceGamma,
-				this.flickerSuppression
-			).toVar();
-
 			const clampIntensity = this.clampIntensity.mul( max( motionFactor.mul( 10 ).min( 1 ), 0.25 ) ).mul(
 				float( 1 ).add( stretchConfidence.oneMinus().add( historyTrust.oneMinus() ).clamp() )
 			);
-			const originalHistoryColor = vec3( historyColor.rgb );
-			historyColor.rgb.assign( mix( historyColor.rgb, clippedRGB, clampIntensity ) );
 
-			totalConfidence.mulAssign( exp( originalHistoryColor.sub( clippedRGB ).length().mul( clampIntensity ).mul( 30 ).negate() ) );
+			if ( isAO ) {
+
+				// Scalar neighbourhood clamp on .r: a min/max box symmetrically widened by varianceGamma
+				// ( gamma = 1 reproduces GTAONode's exact 3×3 clamp; lower tightens the box when static ).
+				const aoMin = aoNeighborhood.get( 'aoMin' );
+				const aoMax = aoNeighborhood.get( 'aoMax' );
+				const center = aoMin.add( aoMax ).mul( 0.5 );
+				const half = aoMax.sub( aoMin ).mul( 0.5 ).mul( varianceGamma );
+				const clippedR = historyColor.r.clamp( center.sub( half ), center.add( half ) ).toVar();
+				const originalR = float( historyColor.r ).toVar();
+				historyColor.r.assign( mix( historyColor.r, clippedR, clampIntensity ) );
+
+				totalConfidence.mulAssign( exp( originalR.sub( clippedR ).abs().mul( clampIntensity ).mul( 30 ).negate() ) );
+
+			} else {
+
+				const clippedRGB = applyVarianceClipping(
+					historyColor,
+					neighborhood.get( 'mean' ),
+					neighborhood.get( 'stdColor' ),
+					varianceGamma,
+					this.flickerSuppression
+				).toVar();
+
+				const originalHistoryColor = vec3( historyColor.rgb );
+				historyColor.rgb.assign( mix( historyColor.rgb, clippedRGB, clampIntensity ) );
+
+				totalConfidence.mulAssign( exp( originalHistoryColor.sub( clippedRGB ).length().mul( clampIntensity ).mul( 30 ).negate() ) );
+
+			}
+
 			totalConfidence.mulAssign( mix( float( 1 ), historyTrust.mul( 0.05 ).add( 0.95 ), motionFactor.mul( 100 ).clamp() ) );
 
 			If( totalConfidence.lessThan( EPSILON ), () => {

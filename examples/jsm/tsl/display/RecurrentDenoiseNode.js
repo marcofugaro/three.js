@@ -311,7 +311,7 @@ const toTextureNode = ( value ) => {
 };
 
 /**
- * @typedef {'diffuse'|'specular'} DenoiseMode
+ * @typedef {'diffuse'|'specular'|'ao'} DenoiseMode
  */
 
 /**
@@ -325,7 +325,7 @@ const toTextureNode = ( value ) => {
  * @property {?Node<vec4>} [metalRoughness=null] - Roughness/metalness G-buffer for specular edge stopping.
  * @property {?Node<vec4>} [diffuse=null] - Scene base color (albedo) G-buffer for chromatic edge stopping.
  * @property {?Node<vec4>} [raw=null] - Unfiltered input (e.g. raw SSR/SSGI) for secondary sampling and temporal blend.
- * @property {DenoiseMode} [mode='diffuse'] - Denoising kernel type.
+ * @property {DenoiseMode} [mode='diffuse'] - Denoising kernel type. `ao` is a single-channel (GTAO) variant of the diffuse kernel that strips the colour/HDR machinery (luminance edge-stop, Karis inverse-luminance temporal blend, firefly weighting) and operates on the `.r` scalar.
  * @property {boolean} [accumulate=true] - When `true`, temporally blend the spatially-denoised result
  * (Karis-style) and write frame weight to alpha for feedback loops. When `false`, only spatial filtering is applied.
  */
@@ -515,6 +515,11 @@ class RecurrentDenoiseNode extends TempNode {
 
 	setup( builder ) {
 
+		// Build-time flag: the single-channel GTAO variant of the diffuse kernel. Every `ao`-only
+		// change below is gated on this so the colour/HDR code is omitted from the `ao` shader and
+		// the `diffuse`/`specular` shaders compile byte-for-byte identically.
+		const isAO = this.mode === 'ao';
+
 		const sampleAnalyticNoise = bindAnalyticNoise( this._resolution, NOISE_ROTATION_SEED );
 
 		const noiseRotationMatrix = Fn( ( [ r ] ) => {
@@ -637,7 +642,7 @@ class RecurrentDenoiseNode extends TempNode {
 					nbhdStddevLuma.assign( stats.z );
 					hasEnvRay.assign( stats.w.greaterThan( 0.5 ) );
 
-				} else {
+				} else if ( ! isAO ) {
 
 					If( this.adaptiveTrust.greaterThan( 0 ), () => {
 
@@ -758,8 +763,17 @@ class RecurrentDenoiseNode extends TempNode {
 
 					const kernelDiff = float( 0 ).toVar();
 
-					// Luma edge stopping
-					kernelDiff.addAssign( luminance( rawNeighborColor.rgb ).sub( luminance( raw.rgb ) ).abs().mul( this.lumaPhi ).mul( 10 ) );
+					// Value edge stopping. `ao` is single-channel so it compares the .r scalar directly;
+					// colour modes use luminance.
+					if ( isAO ) {
+
+						kernelDiff.addAssign( rawNeighborColor.r.sub( raw.r ).abs().mul( this.lumaPhi ).mul( 10 ) );
+
+					} else {
+
+						kernelDiff.addAssign( luminance( rawNeighborColor.rgb ).sub( luminance( raw.rgb ) ).abs().mul( this.lumaPhi ).mul( 10 ) );
+
+					}
 
 					// Diffuse edge stopping (only relevant for specular mode)
 					if ( this.diffuseNode !== null ) {
@@ -813,7 +827,12 @@ class RecurrentDenoiseNode extends TempNode {
 					polarBias.assign( mix( polarBias, sampleDir.mul( w.sub( 0.5 ) ), 0.5 ) );
 
 					// to mitigate the effect of fireflies and high variance in recently disoccluded regions, we weigh by the inverse luminance for the first 5 frames
-					w.mulAssign( mix( float( 1 ).div( luminance( rawNeighborColor.rgb ).pow( 2 ).add( 0.01 ) ), 1, frameNum.div( 5 ).min( 1 ) ) );
+					// ( skipped for `ao`: a bounded [0,1] scalar has no fireflies )
+					if ( ! isAO ) {
+
+						w.mulAssign( mix( float( 1 ).div( luminance( rawNeighborColor.rgb ).pow( 2 ).add( 0.01 ) ), 1, frameNum.div( 5 ).min( 1 ) ) );
+
+					}
 
 					denoisedRaw.addAssign( rawNeighborColor.rgb.mul( w ) );
 					totalWeightRaw.addAssign( w );
@@ -841,7 +860,7 @@ class RecurrentDenoiseNode extends TempNode {
 					const computedFrame = denoisedFrame.div( totalFrameWeight.max( EPSILON ) );
 					const a = float( 1 ).div( computedFrame.max( EPSILON ) ).toConst();
 
-					if ( this.rawNode !== null ) {
+					if ( this.rawNode !== null && ! isAO ) {
 
 						const blended = karisTemporalBlend(
 							denoised,
