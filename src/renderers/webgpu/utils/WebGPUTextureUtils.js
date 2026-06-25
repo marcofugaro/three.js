@@ -148,13 +148,14 @@ class WebGPUTextureUtils {
 	/**
 	 * Creates a GPU sampler for the given texture.
 	 *
-	 * @param {Texture} texture - The texture to create the sampler for.
-	 * @param {TextureNode} textureNode - The texture node to update the sampler with.
+	 * @param {Sampler} binding - The sampler binding to update.
 	 * @return {string} The current sampler key.
 	 */
-	updateSampler( texture, textureNode ) {
+	updateSampler( binding ) {
 
 		const backend = this.backend;
+		const texture = binding.texture;
+		const textureNode = binding.textureNode;
 
 		const samplerKey = texture.minFilter + '-' + texture.magFilter + '-' +
 			texture.wrapS + '-' + texture.wrapT + '-' + ( texture.wrapR || '0' ) + '-' +
@@ -205,35 +206,62 @@ class WebGPUTextureUtils {
 
 		}
 
-		const textureData = backend.get( texture );
+		const bindingData = backend.get( binding );
 
-		if ( textureData.sampler !== samplerData.sampler ) {
+		if ( bindingData.sampler !== samplerData.sampler ) {
 
-			// check if previous sampler is unused so it can be deleted
+			// release the previous sampler (if any) so it can be deleted when unused
 
-			if ( textureData.sampler !== undefined ) {
-
-				const oldSamplerData = this._samplerCache.get( textureData.samplerKey );
-				oldSamplerData.usedTimes --;
-
-				if ( oldSamplerData.usedTimes === 0 ) {
-
-					this._samplerCache.delete( textureData.samplerKey );
-
-				}
-
-			}
+			this._releaseSampler( bindingData );
 
 			// update to new sampler data
 
-			textureData.samplerKey = samplerKey;
-			textureData.sampler = samplerData.sampler;
+			bindingData.samplerKey = samplerKey;
+			bindingData.sampler = samplerData.sampler;
 
 			samplerData.usedTimes ++;
 
 		}
 
 		return samplerKey;
+
+	}
+
+	/**
+	 * Frees the GPU sampler referenced by the given sampler binding.
+	 *
+	 * @param {Sampler} binding - The sampler binding to free.
+	 */
+	destroySampler( binding ) {
+
+		this._releaseSampler( this.backend.get( binding ) );
+
+	}
+
+	/**
+	 * Releases the pooled sampler referenced by the given binding data and
+	 * removes it from the cache when no binding references it anymore.
+	 *
+	 * @private
+	 * @param {Object} bindingData - The binding data holding the sampler reference.
+	 */
+	_releaseSampler( bindingData ) {
+
+		if ( bindingData.sampler !== undefined ) {
+
+			const samplerData = this._samplerCache.get( bindingData.samplerKey );
+			samplerData.usedTimes --;
+
+			if ( samplerData.usedTimes === 0 ) {
+
+				this._samplerCache.delete( bindingData.samplerKey );
+
+			}
+
+			bindingData.sampler = undefined;
+			bindingData.samplerKey = undefined;
+
+		}
 
 	}
 
@@ -406,7 +434,7 @@ class WebGPUTextureUtils {
 		const backend = this.backend;
 		const textureData = backend.get( texture );
 
-		if ( textureData.texture !== undefined && isDefaultTexture === false ) textureData.texture.destroy();
+		if ( textureData.texture !== undefined && isDefaultTexture === false && texture.isExternalTexture !== true ) textureData.texture.destroy();
 
 		if ( textureData.msaaTexture !== undefined ) textureData.msaaTexture.destroy();
 
@@ -648,10 +676,29 @@ class WebGPUTextureUtils {
 			const width = textureDescriptorGPU.size.width;
 			const height = textureDescriptorGPU.size.height;
 
-			device.queue.copyElementImageToTexture(
-				image, width, height,
-				{ texture: textureData.texture }
-			);
+			if ( device.queue.copyElementImageToTexture.length === 2 ) {
+
+				// Chrome 150+
+
+				device.queue.copyElementImageToTexture(
+					{ source: image },
+					{
+						destination: { texture: textureData.texture },
+						width: width,
+						height: height
+					}
+				);
+
+			} else {
+
+				// Chrome 138 - 149
+
+				device.queue.copyElementImageToTexture(
+					image, width, height,
+					{ texture: textureData.texture }
+				);
+
+			}
 
 			if ( texture.flipY ) {
 

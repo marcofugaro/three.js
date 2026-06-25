@@ -284,11 +284,18 @@ class Backend {
 	 * Updates a GPU sampler for the given texture.
 	 *
 	 * @abstract
-	 * @param {Texture} texture - The texture to update the sampler for.
-	 * @param {TextureNode} textureNode - The texture node to update the sampler with.
+	 * @param {Sampler} binding - The sampler binding to update.
 	 * @return {string} The current sampler key.
 	 */
-	updateSampler( /*texture, textureNode*/ ) { }
+	updateSampler( /*binding*/ ) { }
+
+	/**
+	 * Frees the GPU sampler for the given sampler binding.
+	 *
+	 * @abstract
+	 * @param {Sampler} binding - The sampler binding to free.
+	 */
+	destroySampler( /*binding*/ ) { }
 
 	/**
 	 * Creates a default texture for the given texture that can be used
@@ -542,16 +549,28 @@ class Backend {
 	}
 
 	/**
+	 * Whether the backend supports query timestamps or not.
+	 *
+	 * @type {boolean}
+	 * @readonly
+	 */
+	get hasTimestamp() {
+
+		return false;
+
+	}
+
+	/**
 	 * Returns `true` if a timestamp for the given uid is available.
 	 *
 	 * @param {string} uid - The unique identifier.
 	 * @return {boolean} Whether the timestamp is available or not.
 	 */
-	hasTimestamp( uid ) {
+	hasTimestampQuery( uid ) {
 
 		const queryPool = this._getQueryPool( uid );
 
-		return queryPool.hasTimestamp( uid );
+		return queryPool.hasTimestampQuery( uid );
 
 	}
 

@@ -426,13 +426,12 @@ class Textures extends DataMap {
 	 * In WebGPU, samplers are objects like textures and it's possible to share
 	 * them when the texture parameters match.
 	 *
-	 * @param {Texture} texture - The texture to update the sampler for.
-	 * @param {TextureNode} textureNode - The texture node to update the sampler with.
+	 * @param {Sampler} binding - The sampler binding to update.
 	 * @return {string} The current sampler key.
 	 */
-	updateSampler( texture, textureNode ) {
+	updateSampler( binding ) {
 
-		return this.backend.updateSampler( texture, textureNode );
+		return this.backend.updateSampler( binding );
 
 	}
 
@@ -624,6 +623,12 @@ class Textures extends DataMap {
 					for ( const binding of bindGroup.bindings ) {
 
 						if ( binding.isSampler && binding.texture === texture ) {
+
+							if ( binding.isSampledTexture !== true ) {
+
+								this.backend.destroySampler( binding );
+
+							}
 
 							binding.reset();
 							binding.release();

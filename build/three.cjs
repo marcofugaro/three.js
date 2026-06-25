@@ -6429,11 +6429,14 @@ class Matrix3 {
 	/**
 	 * Scales this matrix with the given scalar values.
 	 *
+	 * @deprecated
 	 * @param {number} sx - The amount to scale in the X axis.
 	 * @param {number} sy - The amount to scale in the Y axis.
 	 * @return {Matrix3} A reference to this matrix.
 	 */
 	scale( sx, sy ) {
+
+		warnOnce( 'Matrix3: .scale() is deprecated. Use .makeScale() instead.' ); // @deprecated r185
 
 		this.premultiply( _m3.makeScale( sx, sy ) );
 
@@ -6444,10 +6447,13 @@ class Matrix3 {
 	/**
 	 * Rotates this matrix by the given angle.
 	 *
+	 * @deprecated
 	 * @param {number} theta - The rotation in radians.
 	 * @return {Matrix3} A reference to this matrix.
 	 */
 	rotate( theta ) {
+
+		warnOnce( 'Matrix3: .rotate() is deprecated. Use .makeRotation() instead.' ); // @deprecated r185
 
 		this.premultiply( _m3.makeRotation( - theta ) );
 
@@ -6458,11 +6464,14 @@ class Matrix3 {
 	/**
 	 * Translates this matrix by the given scalar values.
 	 *
+	 * @deprecated
 	 * @param {number} tx - The amount to translate in the X axis.
 	 * @param {number} ty - The amount to translate in the Y axis.
 	 * @return {Matrix3} A reference to this matrix.
 	 */
 	translate( tx, ty ) {
+
+		warnOnce( 'Matrix3: .translate() is deprecated. Use .makeTranslation() instead.' ); // @deprecated r185
 
 		this.premultiply( _m3.makeTranslation( tx, ty ) );
 
@@ -10054,7 +10063,7 @@ class Matrix4 {
 	 */
 	extractBasis( xAxis, yAxis, zAxis ) {
 
-		if ( this.determinant() === 0 ) {
+		if ( this.determinantAffine() === 0 ) {
 
 			xAxis.set( 1, 0, 0 );
 			yAxis.set( 0, 1, 0 );
@@ -10104,7 +10113,7 @@ class Matrix4 {
 	 */
 	extractRotation( m ) {
 
-		if ( m.determinant() === 0 ) {
+		if ( m.determinantAffine() === 0 ) {
 
 			return this.identity();
 
@@ -10462,6 +10471,31 @@ class Matrix4 {
 			n12 * ( n41 * t11 - n43 * t21 + n44 * t22 ) +
 			n13 * ( n41 * t12 - n42 * t21 + n44 * t23 ) -
 			n14 * ( n41 * t13 - n42 * t22 + n43 * t23 );
+
+	}
+
+	/**
+	 * Computes and returns the determinant of the 4x4 matrix, but assumes the
+	 * matrix is affine, saving some computations.
+	 *
+	 * For affine matrices (like an object's world matrix), this value equals the
+	 * full 4x4 {@link Matrix4#determinant} but is cheaper to compute.
+	 *
+	 * Assumes the bottom row is [0, 0, 0, 1].
+	 *
+	 * @return {number} The determinant of the matrix.
+	 */
+	determinantAffine() {
+
+		const te = this.elements;
+
+		const n11 = te[ 0 ], n12 = te[ 4 ], n13 = te[ 8 ];
+		const n21 = te[ 1 ], n22 = te[ 5 ], n23 = te[ 9 ];
+		const n31 = te[ 2 ], n32 = te[ 6 ], n33 = te[ 10 ];
+
+		return n11 * ( n22 * n33 - n23 * n32 ) -
+			n12 * ( n21 * n33 - n23 * n31 ) +
+			n13 * ( n21 * n32 - n22 * n31 );
 
 	}
 
@@ -10874,7 +10908,7 @@ class Matrix4 {
 		position.y = te[ 13 ];
 		position.z = te[ 14 ];
 
-		const det = this.determinant();
+		const det = this.determinantAffine();
 
 		if ( det === 0 ) {
 
@@ -12889,8 +12923,10 @@ class Object3D extends EventDispatcher {
 	 *
 	 * @param {boolean} [updateParents=false] Whether ancestor nodes should be updated or not.
 	 * @param {boolean} [updateChildren=false] Whether descendant nodes should be updated or not.
+	 * @param {boolean} [force=false] - When set to `true`, a recomputation of world matrices is forced even
+	 * when {@link Object3D#matrixWorldNeedsUpdate} is `false`.
 	 */
-	updateWorldMatrix( updateParents, updateChildren ) {
+	updateWorldMatrix( updateParents, updateChildren, force = false ) {
 
 		const parent = this.parent;
 
@@ -12902,17 +12938,25 @@ class Object3D extends EventDispatcher {
 
 		if ( this.matrixAutoUpdate ) this.updateMatrix();
 
-		if ( this.matrixWorldAutoUpdate === true ) {
+		if ( this.matrixWorldNeedsUpdate || force ) {
 
-			if ( this.parent === null ) {
+			if ( this.matrixWorldAutoUpdate === true ) {
 
-				this.matrixWorld.copy( this.matrix );
+				if ( this.parent === null ) {
 
-			} else {
+					this.matrixWorld.copy( this.matrix );
 
-				this.matrixWorld.multiplyMatrices( this.parent.matrixWorld, this.matrix );
+				} else {
+
+					this.matrixWorld.multiplyMatrices( this.parent.matrixWorld, this.matrix );
+
+				}
 
 			}
+
+			this.matrixWorldNeedsUpdate = false;
+
+			force = true;
 
 		}
 
@@ -12926,7 +12970,7 @@ class Object3D extends EventDispatcher {
 
 				const child = children[ i ];
 
-				child.updateWorldMatrix( false, true );
+				child.updateWorldMatrix( false, true, force );
 
 			}
 
@@ -25681,7 +25725,6 @@ class Frustum {
 }
 
 const _projScreenMatrix$2 = /*@__PURE__*/ new Matrix4();
-const _frustum$1 = /*@__PURE__*/ new Frustum();
 
 /**
  * FrustumArray is used to determine if an object is visible in at least one camera
@@ -25703,220 +25746,191 @@ class FrustumArray {
 		 */
 		this.coordinateSystem = WebGLCoordinateSystem;
 
+		/**
+		 * A pool of frustum instances. It may hold more entries than are
+		 * currently in use; surplus instances are kept for reuse to avoid
+		 * reallocating when array cameras of different lengths are rendered.
+		 *
+		 * @private
+		 * @type {Array<Frustum>}
+		 */
+		this._frustums = [];
+
+		/**
+		 * The number of frustums in {@link FrustumArray#_frustums} that are currently
+		 * in use.
+		 *
+		 * @private
+		 * @type {number}
+		 * @default 0
+		 */
+		this._count = 0;
+
 	}
 
 	/**
-	 * Returns `true` if the 3D object's bounding sphere is intersecting any frustum
-	 * from the camera array.
+	 * Computes and caches a frustum for each camera of the given array camera.
+	 *
+	 * @param {ArrayCamera} cameraArray - The array camera whose sub-cameras define the frustums.
+	 * @return {FrustumArray} A reference to this frustum array.
+	 */
+	setFromArrayCamera( cameraArray ) {
+
+		const cameras = cameraArray.cameras;
+		const frustums = this._frustums;
+
+		for ( let i = 0; i < cameras.length; i ++ ) {
+
+			const camera = cameras[ i ];
+
+			_projScreenMatrix$2.multiplyMatrices( camera.projectionMatrix, camera.matrixWorldInverse );
+
+			if ( frustums[ i ] === undefined ) frustums[ i ] = new Frustum();
+
+			frustums[ i ].setFromProjectionMatrix( _projScreenMatrix$2, camera.coordinateSystem, camera.reversedDepth );
+
+		}
+
+		this._count = cameras.length;
+
+		return this;
+
+	}
+
+	/**
+	 * Returns `true` if the 3D object's bounding sphere is intersecting any cached frustum.
+	 *
+	 * {@link FrustumArray#setFromArrayCamera} must be called once per render before this method.
 	 *
 	 * @param {Object3D} object - The 3D object to test.
-	 * @param {Object} cameraArray - An object with a cameras property containing an array of cameras.
 	 * @return {boolean} Whether the 3D object is visible in any camera.
 	 */
-	intersectsObject( object, cameraArray ) {
+	intersectsObject( object ) {
 
-		if ( ! cameraArray.isArrayCamera || cameraArray.cameras.length === 0 ) {
+		const frustums = this._frustums;
 
-			return false;
+		for ( let i = 0; i < this._count; i ++ ) {
 
-		}
-
-		for ( let i = 0; i < cameraArray.cameras.length; i ++ ) {
-
-			const camera = cameraArray.cameras[ i ];
-
-			_projScreenMatrix$2.multiplyMatrices(
-				camera.projectionMatrix,
-				camera.matrixWorldInverse
-			);
-
-			_frustum$1.setFromProjectionMatrix(
-				_projScreenMatrix$2,
-				camera.coordinateSystem,
-				camera.reversedDepth
-			);
-
-			if ( _frustum$1.intersectsObject( object ) ) {
-
-				return true; // Object is visible in at least one camera
-
-			}
+			if ( frustums[ i ].intersectsObject( object ) ) return true;
 
 		}
 
-		return false; // Not visible in any camera
+		return false;
 
 	}
 
 	/**
-	 * Returns `true` if the given sprite is intersecting any frustum
-	 * from the camera array.
+	 * Returns `true` if the given sprite is intersecting any cached frustum.
+	 *
+	 * {@link FrustumArray#setFromArrayCamera} must be called once per render before this method.
 	 *
 	 * @param {Sprite} sprite - The sprite to test.
-	 * @param {Object} cameraArray - An object with a cameras property containing an array of cameras.
 	 * @return {boolean} Whether the sprite is visible in any camera.
 	 */
-	intersectsSprite( sprite, cameraArray ) {
+	intersectsSprite( sprite ) {
 
-		if ( ! cameraArray || ! cameraArray.cameras || cameraArray.cameras.length === 0 ) {
+		const frustums = this._frustums;
 
-			return false;
+		for ( let i = 0; i < this._count; i ++ ) {
 
-		}
-
-		for ( let i = 0; i < cameraArray.cameras.length; i ++ ) {
-
-			const camera = cameraArray.cameras[ i ];
-
-			_projScreenMatrix$2.multiplyMatrices(
-				camera.projectionMatrix,
-				camera.matrixWorldInverse
-			);
-
-			_frustum$1.setFromProjectionMatrix(
-				_projScreenMatrix$2,
-				camera.coordinateSystem,
-				camera.reversedDepth
-			);
-
-			if ( _frustum$1.intersectsSprite( sprite ) ) {
-
-				return true; // Sprite is visible in at least one camera
-
-			}
+			if ( frustums[ i ].intersectsSprite( sprite ) ) return true;
 
 		}
 
-		return false; // Not visible in any camera
+		return false;
 
 	}
 
 	/**
-	 * Returns `true` if the given bounding sphere is intersecting any frustum
-	 * from the camera array.
+	 * Returns `true` if the given bounding sphere is intersecting any cached frustum.
+	 *
+	 * {@link FrustumArray#setFromArrayCamera} must be called once per render before this method.
 	 *
 	 * @param {Sphere} sphere - The bounding sphere to test.
-	 * @param {Object} cameraArray - An object with a cameras property containing an array of cameras.
 	 * @return {boolean} Whether the sphere is visible in any camera.
 	 */
-	intersectsSphere( sphere, cameraArray ) {
+	intersectsSphere( sphere ) {
 
-		if ( ! cameraArray || ! cameraArray.cameras || cameraArray.cameras.length === 0 ) {
+		const frustums = this._frustums;
 
-			return false;
+		for ( let i = 0; i < this._count; i ++ ) {
 
-		}
-
-		for ( let i = 0; i < cameraArray.cameras.length; i ++ ) {
-
-			const camera = cameraArray.cameras[ i ];
-
-			_projScreenMatrix$2.multiplyMatrices(
-				camera.projectionMatrix,
-				camera.matrixWorldInverse
-			);
-
-			_frustum$1.setFromProjectionMatrix(
-				_projScreenMatrix$2,
-				camera.coordinateSystem,
-				camera.reversedDepth
-			);
-
-			if ( _frustum$1.intersectsSphere( sphere ) ) {
-
-				return true; // Sphere is visible in at least one camera
-
-			}
+			if ( frustums[ i ].intersectsSphere( sphere ) ) return true;
 
 		}
 
-		return false; // Not visible in any camera
+		return false;
 
 	}
 
 	/**
-	 * Returns `true` if the given bounding box is intersecting any frustum
-	 * from the camera array.
+	 * Returns `true` if the given bounding box is intersecting any cached frustum.
+	 *
+	 * {@link FrustumArray#setFromArrayCamera} must be called once per render before this method.
 	 *
 	 * @param {Box3} box - The bounding box to test.
-	 * @param {Object} cameraArray - An object with a cameras property containing an array of cameras.
 	 * @return {boolean} Whether the box is visible in any camera.
 	 */
-	intersectsBox( box, cameraArray ) {
+	intersectsBox( box ) {
 
-		if ( ! cameraArray || ! cameraArray.cameras || cameraArray.cameras.length === 0 ) {
+		const frustums = this._frustums;
 
-			return false;
+		for ( let i = 0; i < this._count; i ++ ) {
 
-		}
-
-		for ( let i = 0; i < cameraArray.cameras.length; i ++ ) {
-
-			const camera = cameraArray.cameras[ i ];
-
-			_projScreenMatrix$2.multiplyMatrices(
-				camera.projectionMatrix,
-				camera.matrixWorldInverse
-			);
-
-			_frustum$1.setFromProjectionMatrix(
-				_projScreenMatrix$2,
-				camera.coordinateSystem,
-				camera.reversedDepth
-			);
-
-			if ( _frustum$1.intersectsBox( box ) ) {
-
-				return true; // Box is visible in at least one camera
-
-			}
+			if ( frustums[ i ].intersectsBox( box ) ) return true;
 
 		}
 
-		return false; // Not visible in any camera
+		return false;
 
 	}
 
 	/**
-	 * Returns `true` if the given point lies within any frustum
-	 * from the camera array.
+	 * Returns `true` if the given point lies within any cached frustum.
+	 *
+	 * {@link FrustumArray#setFromArrayCamera} must be called once per render before this method.
 	 *
 	 * @param {Vector3} point - The point to test.
-	 * @param {Object} cameraArray - An object with a cameras property containing an array of cameras.
 	 * @return {boolean} Whether the point is visible in any camera.
 	 */
-	containsPoint( point, cameraArray ) {
+	containsPoint( point ) {
 
-		if ( ! cameraArray || ! cameraArray.cameras || cameraArray.cameras.length === 0 ) {
+		const frustums = this._frustums;
 
-			return false;
+		for ( let i = 0; i < this._count; i ++ ) {
 
-		}
-
-		for ( let i = 0; i < cameraArray.cameras.length; i ++ ) {
-
-			const camera = cameraArray.cameras[ i ];
-
-			_projScreenMatrix$2.multiplyMatrices(
-				camera.projectionMatrix,
-				camera.matrixWorldInverse
-			);
-
-			_frustum$1.setFromProjectionMatrix(
-				_projScreenMatrix$2,
-				camera.coordinateSystem,
-				camera.reversedDepth
-			);
-
-			if ( _frustum$1.containsPoint( point ) ) {
-
-				return true; // Point is visible in at least one camera
-
-			}
+			if ( frustums[ i ].containsPoint( point ) ) return true;
 
 		}
 
-		return false; // Not visible in any camera
+		return false;
+
+	}
+
+	/**
+	 * Copies the values of the given frustum array to this instance.
+	 *
+	 * @param {FrustumArray} frustumArray - The frustum array to copy.
+	 * @return {FrustumArray} A reference to this frustum array.
+	 */
+	copy( source ) {
+
+		this.coordinateSystem = source.coordinateSystem;
+
+		const frustums = this._frustums;
+		const sourceFrustums = source._frustums;
+
+		for ( let i = 0; i < source._count; i ++ ) {
+
+			if ( frustums[ i ] === undefined ) frustums[ i ] = new Frustum();
+
+			frustums[ i ].copy( sourceFrustums[ i ] );
+
+		}
+
+		this._count = source._count;
+
+		return this;
 
 	}
 
@@ -25927,7 +25941,7 @@ class FrustumArray {
 	 */
 	clone() {
 
-		return new FrustumArray();
+		return new FrustumArray().copy( this );
 
 	}
 
@@ -27473,17 +27487,25 @@ class BatchedMesh extends Mesh {
 
 		const frustum = camera.isArrayCamera ? _frustumArray : _frustum;
 		// prepare the frustum in the local frame
-		if ( perObjectFrustumCulled && ! camera.isArrayCamera ) {
+		if ( perObjectFrustumCulled ) {
 
-			_matrix$1
-				.multiplyMatrices( camera.projectionMatrix, camera.matrixWorldInverse )
-				.multiply( this.matrixWorld );
+			if ( camera.isArrayCamera ) {
 
-			_frustum.setFromProjectionMatrix(
-				_matrix$1,
-				camera.coordinateSystem,
-				camera.reversedDepth
-			);
+				frustum.setFromArrayCamera( camera );
+
+			} else {
+
+				_matrix$1
+					.multiplyMatrices( camera.projectionMatrix, camera.matrixWorldInverse )
+					.multiply( this.matrixWorld );
+
+				frustum.setFromProjectionMatrix(
+					_matrix$1,
+					camera.coordinateSystem,
+					camera.reversedDepth
+				);
+
+			}
 
 		}
 
@@ -27509,7 +27531,7 @@ class BatchedMesh extends Mesh {
 					let culled = false;
 					if ( perObjectFrustumCulled ) {
 
-						culled = ! frustum.intersectsSphere( _sphere$2, camera );
+						culled = ! frustum.intersectsSphere( _sphere$2 );
 
 					}
 
@@ -27566,7 +27588,7 @@ class BatchedMesh extends Mesh {
 						// get the bounds in world space
 						this.getMatrixAt( i, _matrix$1 );
 						this.getBoundingSphereAt( geometryId, _sphere$2 ).applyMatrix4( _matrix$1 );
-						culled = ! frustum.intersectsSphere( _sphere$2, camera );
+						culled = ! frustum.intersectsSphere( _sphere$2 );
 
 					}
 
@@ -29354,9 +29376,6 @@ class CubeDepthTexture extends DepthTexture {
  *
  * This may be a texture from a protected media stream, device camera feed,
  * or other data feeds like a depth sensor.
- *
- * Note that this class is only supported in {@link WebGLRenderer}, and in
- * the {@link WebGPURenderer} WebGPU backend.
  *
  * @augments Texture
  */
@@ -46169,9 +46188,9 @@ class Camera extends Object3D {
 
 	}
 
-	updateWorldMatrix( updateParents, updateChildren ) {
+	updateWorldMatrix( updateParents, updateChildren, force = false ) {
 
-		super.updateWorldMatrix( updateParents, updateChildren );
+		super.updateWorldMatrix( updateParents, updateChildren, force );
 
 		// exclude scale from view matrix to be glTF conform
 
@@ -50212,8 +50231,11 @@ class StereoCamera {
 
 		}
 
-		this.cameraL.matrixWorld.copy( camera.matrixWorld ).multiply( _eyeLeft );
-		this.cameraR.matrixWorld.copy( camera.matrixWorld ).multiply( _eyeRight );
+		this.cameraL.matrix.copy( camera.matrixWorld ).multiply( _eyeLeft );
+		this.cameraL.matrixWorldNeedsUpdate = true;
+
+		this.cameraR.matrix.copy( camera.matrixWorld ).multiply( _eyeRight );
+		this.cameraR.matrixWorldNeedsUpdate = true;
 
 	}
 
@@ -57524,7 +57546,7 @@ class SpotLightHelper extends Object3D {
 
 		}
 
-		this.matrixWorld.copy( this.light.matrixWorld );
+		this.matrixWorldNeedsUpdate = true;
 
 		const coneLength = this.light.distance ? this.light.distance : 1000;
 		const coneWidth = coneLength * Math.tan( this.light.angle );
@@ -57807,6 +57829,8 @@ class PointLightHelper extends Mesh {
 	 */
 	update() {
 
+		this.matrixWorldNeedsUpdate = true;
+
 		this.light.updateWorldMatrix( true, false );
 
 		if ( this.color !== undefined ) {
@@ -57949,6 +57973,8 @@ class HemisphereLightHelper extends Object3D {
 			colors.needsUpdate = true;
 
 		}
+
+		this.matrixWorldNeedsUpdate = true;
 
 		this.light.updateWorldMatrix( true, false );
 
@@ -58260,6 +58286,8 @@ class DirectionalLightHelper extends Object3D {
 	 * light being visualized.
 	 */
 	update() {
+
+		this.matrixWorldNeedsUpdate = true;
 
 		this.light.updateWorldMatrix( true, false );
 		this.light.target.updateWorldMatrix( true, false );
@@ -60293,7 +60321,7 @@ var common = "#define PI 3.141592653589793\n#define PI2 6.283185307179586\n#defi
 
 var cube_uv_reflection_fragment = "#ifdef ENVMAP_TYPE_CUBE_UV\n\t#define cubeUV_minMipLevel 4.0\n\t#define cubeUV_minTileSize 16.0\n\tfloat getFace( vec3 direction ) {\n\t\tvec3 absDirection = abs( direction );\n\t\tfloat face = - 1.0;\n\t\tif ( absDirection.x > absDirection.z ) {\n\t\t\tif ( absDirection.x > absDirection.y )\n\t\t\t\tface = direction.x > 0.0 ? 0.0 : 3.0;\n\t\t\telse\n\t\t\t\tface = direction.y > 0.0 ? 1.0 : 4.0;\n\t\t} else {\n\t\t\tif ( absDirection.z > absDirection.y )\n\t\t\t\tface = direction.z > 0.0 ? 2.0 : 5.0;\n\t\t\telse\n\t\t\t\tface = direction.y > 0.0 ? 1.0 : 4.0;\n\t\t}\n\t\treturn face;\n\t}\n\tvec2 getUV( vec3 direction, float face ) {\n\t\tvec2 uv;\n\t\tif ( face == 0.0 ) {\n\t\t\tuv = vec2( direction.z, direction.y ) / abs( direction.x );\n\t\t} else if ( face == 1.0 ) {\n\t\t\tuv = vec2( - direction.x, - direction.z ) / abs( direction.y );\n\t\t} else if ( face == 2.0 ) {\n\t\t\tuv = vec2( - direction.x, direction.y ) / abs( direction.z );\n\t\t} else if ( face == 3.0 ) {\n\t\t\tuv = vec2( - direction.z, direction.y ) / abs( direction.x );\n\t\t} else if ( face == 4.0 ) {\n\t\t\tuv = vec2( - direction.x, direction.z ) / abs( direction.y );\n\t\t} else {\n\t\t\tuv = vec2( direction.x, direction.y ) / abs( direction.z );\n\t\t}\n\t\treturn 0.5 * ( uv + 1.0 );\n\t}\n\tvec3 bilinearCubeUV( sampler2D envMap, vec3 direction, float mipInt ) {\n\t\tfloat face = getFace( direction );\n\t\tfloat filterInt = max( cubeUV_minMipLevel - mipInt, 0.0 );\n\t\tmipInt = max( mipInt, cubeUV_minMipLevel );\n\t\tfloat faceSize = exp2( mipInt );\n\t\thighp vec2 uv = getUV( direction, face ) * ( faceSize - 2.0 ) + 1.0;\n\t\tif ( face > 2.0 ) {\n\t\t\tuv.y += faceSize;\n\t\t\tface -= 3.0;\n\t\t}\n\t\tuv.x += face * faceSize;\n\t\tuv.x += filterInt * 3.0 * cubeUV_minTileSize;\n\t\tuv.y += 4.0 * ( exp2( CUBEUV_MAX_MIP ) - faceSize );\n\t\tuv.x *= CUBEUV_TEXEL_WIDTH;\n\t\tuv.y *= CUBEUV_TEXEL_HEIGHT;\n\t\t#ifdef texture2DGradEXT\n\t\t\treturn texture2DGradEXT( envMap, uv, vec2( 0.0 ), vec2( 0.0 ) ).rgb;\n\t\t#else\n\t\t\treturn texture2D( envMap, uv ).rgb;\n\t\t#endif\n\t}\n\t#define cubeUV_r0 1.0\n\t#define cubeUV_m0 - 2.0\n\t#define cubeUV_r1 0.8\n\t#define cubeUV_m1 - 1.0\n\t#define cubeUV_r4 0.4\n\t#define cubeUV_m4 2.0\n\t#define cubeUV_r5 0.305\n\t#define cubeUV_m5 3.0\n\t#define cubeUV_r6 0.21\n\t#define cubeUV_m6 4.0\n\tfloat roughnessToMip( float roughness ) {\n\t\tfloat mip = 0.0;\n\t\tif ( roughness >= cubeUV_r1 ) {\n\t\t\tmip = ( cubeUV_r0 - roughness ) * ( cubeUV_m1 - cubeUV_m0 ) / ( cubeUV_r0 - cubeUV_r1 ) + cubeUV_m0;\n\t\t} else if ( roughness >= cubeUV_r4 ) {\n\t\t\tmip = ( cubeUV_r1 - roughness ) * ( cubeUV_m4 - cubeUV_m1 ) / ( cubeUV_r1 - cubeUV_r4 ) + cubeUV_m1;\n\t\t} else if ( roughness >= cubeUV_r5 ) {\n\t\t\tmip = ( cubeUV_r4 - roughness ) * ( cubeUV_m5 - cubeUV_m4 ) / ( cubeUV_r4 - cubeUV_r5 ) + cubeUV_m4;\n\t\t} else if ( roughness >= cubeUV_r6 ) {\n\t\t\tmip = ( cubeUV_r5 - roughness ) * ( cubeUV_m6 - cubeUV_m5 ) / ( cubeUV_r5 - cubeUV_r6 ) + cubeUV_m5;\n\t\t} else {\n\t\t\tmip = - 2.0 * log2( 1.16 * roughness );\t\t}\n\t\treturn mip;\n\t}\n\tvec4 textureCubeUV( sampler2D envMap, vec3 sampleDir, float roughness ) {\n\t\tfloat mip = clamp( roughnessToMip( roughness ), cubeUV_m0, CUBEUV_MAX_MIP );\n\t\tfloat mipF = fract( mip );\n\t\tfloat mipInt = floor( mip );\n\t\tvec3 color0 = bilinearCubeUV( envMap, sampleDir, mipInt );\n\t\tif ( mipF == 0.0 ) {\n\t\t\treturn vec4( color0, 1.0 );\n\t\t} else {\n\t\t\tvec3 color1 = bilinearCubeUV( envMap, sampleDir, mipInt + 1.0 );\n\t\t\treturn vec4( mix( color0, color1, mipF ), 1.0 );\n\t\t}\n\t}\n#endif";
 
-var defaultnormal_vertex = "vec3 transformedNormal = objectNormal;\n#ifdef USE_TANGENT\n\tvec3 transformedTangent = objectTangent;\n#endif\n#ifdef USE_BATCHING\n\tmat3 bm = mat3( batchingMatrix );\n\ttransformedNormal /= vec3( dot( bm[ 0 ], bm[ 0 ] ), dot( bm[ 1 ], bm[ 1 ] ), dot( bm[ 2 ], bm[ 2 ] ) );\n\ttransformedNormal = bm * transformedNormal;\n\t#ifdef USE_TANGENT\n\t\ttransformedTangent = bm * transformedTangent;\n\t#endif\n#endif\n#ifdef USE_INSTANCING\n\tmat3 im = mat3( instanceMatrix );\n\ttransformedNormal /= vec3( dot( im[ 0 ], im[ 0 ] ), dot( im[ 1 ], im[ 1 ] ), dot( im[ 2 ], im[ 2 ] ) );\n\ttransformedNormal = im * transformedNormal;\n\t#ifdef USE_TANGENT\n\t\ttransformedTangent = im * transformedTangent;\n\t#endif\n#endif\ntransformedNormal = normalMatrix * transformedNormal;\n#ifdef FLIP_SIDED\n\ttransformedNormal = - transformedNormal;\n#endif\n#ifdef USE_TANGENT\n\ttransformedTangent = ( modelViewMatrix * vec4( transformedTangent, 0.0 ) ).xyz;\n\t#ifdef FLIP_SIDED\n\t\ttransformedTangent = - transformedTangent;\n\t#endif\n#endif";
+var defaultnormal_vertex = "vec3 transformedNormal = objectNormal;\n#ifdef USE_TANGENT\n\tvec3 transformedTangent = objectTangent;\n#endif\n#ifdef USE_BATCHING\n\tmat3 bm = mat3( batchingMatrix );\n\ttransformedNormal /= vec3( dot( bm[ 0 ], bm[ 0 ] ), dot( bm[ 1 ], bm[ 1 ] ), dot( bm[ 2 ], bm[ 2 ] ) );\n\ttransformedNormal = bm * transformedNormal;\n\t#ifdef USE_TANGENT\n\t\ttransformedTangent = bm * transformedTangent;\n\t#endif\n#endif\n#ifdef USE_INSTANCING\n\tmat3 im = mat3( instanceMatrix );\n\ttransformedNormal /= vec3( dot( im[ 0 ], im[ 0 ] ), dot( im[ 1 ], im[ 1 ] ), dot( im[ 2 ], im[ 2 ] ) );\n\ttransformedNormal = im * transformedNormal;\n\t#ifdef USE_TANGENT\n\t\ttransformedTangent = im * transformedTangent;\n\t#endif\n#endif\ntransformedNormal = normalMatrix * transformedNormal;\n#ifdef FLIP_SIDED\n\ttransformedNormal = - transformedNormal;\n#endif\n#ifdef USE_TANGENT\n\ttransformedTangent = ( modelViewMatrix * vec4( transformedTangent, 0.0 ) ).xyz;\n#endif";
 
 var displacementmap_pars_vertex = "#ifdef USE_DISPLACEMENTMAP\n\tuniform sampler2D displacementMap;\n\tuniform float displacementScale;\n\tuniform float displacementBias;\n#endif";
 
@@ -60387,7 +60415,7 @@ var morphtarget_pars_vertex = "#ifdef USE_MORPHTARGETS\n\t#ifndef USE_INSTANCING
 
 var morphtarget_vertex = "#ifdef USE_MORPHTARGETS\n\ttransformed *= morphTargetBaseInfluence;\n\tfor ( int i = 0; i < MORPHTARGETS_COUNT; i ++ ) {\n\t\tif ( morphTargetInfluences[ i ] != 0.0 ) transformed += getMorph( gl_VertexID, i, 0 ).xyz * morphTargetInfluences[ i ];\n\t}\n#endif";
 
-var normal_fragment_begin = "float faceDirection = gl_FrontFacing ? 1.0 : - 1.0;\n#ifdef FLAT_SHADED\n\tvec3 fdx = dFdx( vViewPosition );\n\tvec3 fdy = dFdy( vViewPosition );\n\tvec3 normal = normalize( cross( fdx, fdy ) );\n#else\n\tvec3 normal = normalize( vNormal );\n\t#ifdef DOUBLE_SIDED\n\t\tnormal *= faceDirection;\n\t#endif\n#endif\n#if defined( USE_NORMALMAP_TANGENTSPACE ) || defined( USE_CLEARCOAT_NORMALMAP ) || defined( USE_ANISOTROPY )\n\t#ifdef USE_TANGENT\n\t\tmat3 tbn = mat3( normalize( vTangent ), normalize( vBitangent ), normal );\n\t#else\n\t\tmat3 tbn = getTangentFrame( - vViewPosition, normal,\n\t\t#if defined( USE_NORMALMAP )\n\t\t\tvNormalMapUv\n\t\t#elif defined( USE_CLEARCOAT_NORMALMAP )\n\t\t\tvClearcoatNormalMapUv\n\t\t#else\n\t\t\tvUv\n\t\t#endif\n\t\t);\n\t#endif\n\t#if defined( DOUBLE_SIDED ) && ! defined( FLAT_SHADED )\n\t\ttbn[0] *= faceDirection;\n\t\ttbn[1] *= faceDirection;\n\t#endif\n#endif\n#ifdef USE_CLEARCOAT_NORMALMAP\n\t#ifdef USE_TANGENT\n\t\tmat3 tbn2 = mat3( normalize( vTangent ), normalize( vBitangent ), normal );\n\t#else\n\t\tmat3 tbn2 = getTangentFrame( - vViewPosition, normal, vClearcoatNormalMapUv );\n\t#endif\n\t#if defined( DOUBLE_SIDED ) && ! defined( FLAT_SHADED )\n\t\ttbn2[0] *= faceDirection;\n\t\ttbn2[1] *= faceDirection;\n\t#endif\n#endif\nvec3 nonPerturbedNormal = normal;";
+var normal_fragment_begin = "float faceDirection = gl_FrontFacing ? 1.0 : - 1.0;\n#ifdef FLAT_SHADED\n\tvec3 fdx = dFdx( vViewPosition );\n\tvec3 fdy = dFdy( vViewPosition );\n\tvec3 normal = normalize( cross( fdx, fdy ) );\n#else\n\tvec3 normal = normalize( vNormal );\n\t#ifdef DOUBLE_SIDED\n\t\tnormal *= faceDirection;\n\t#endif\n#endif\n#if defined( USE_NORMALMAP_TANGENTSPACE ) || defined( USE_CLEARCOAT_NORMALMAP ) || defined( USE_ANISOTROPY )\n\t#ifdef USE_TANGENT\n\t\tmat3 tbn = mat3( normalize( vTangent ), normalize( vBitangent ), normal );\n\t#else\n\t\tmat3 tbn = getTangentFrame( - vViewPosition, normal,\n\t\t#if defined( USE_NORMALMAP )\n\t\t\tvNormalMapUv\n\t\t#elif defined( USE_CLEARCOAT_NORMALMAP )\n\t\t\tvClearcoatNormalMapUv\n\t\t#else\n\t\t\tvUv\n\t\t#endif\n\t\t);\n\t#endif\n\t#ifdef DOUBLE_SIDED\n\t\ttbn[0] *= faceDirection;\n\t\ttbn[1] *= faceDirection;\n\t#endif\n#endif\n#ifdef USE_CLEARCOAT_NORMALMAP\n\t#ifdef USE_TANGENT\n\t\tmat3 tbn2 = mat3( normalize( vTangent ), normalize( vBitangent ), normal );\n\t#else\n\t\tmat3 tbn2 = getTangentFrame( - vViewPosition, normal, vClearcoatNormalMapUv );\n\t#endif\n\t#ifdef DOUBLE_SIDED\n\t\ttbn2[0] *= faceDirection;\n\t\ttbn2[1] *= faceDirection;\n\t#endif\n#endif\nvec3 nonPerturbedNormal = normal;";
 
 var normal_fragment_maps = "#ifdef USE_NORMALMAP_OBJECTSPACE\n\tnormal = texture2D( normalMap, vNormalMapUv ).xyz * 2.0 - 1.0;\n\t#ifdef FLIP_SIDED\n\t\tnormal = - normal;\n\t#endif\n\t#ifdef DOUBLE_SIDED\n\t\tnormal = normal * faceDirection;\n\t#endif\n\tnormal = normalize( normalMatrix * normal );\n#elif defined( USE_NORMALMAP_TANGENTSPACE )\n\tvec3 mapN = texture2D( normalMap, vNormalMapUv ).xyz * 2.0 - 1.0;\n\t#if defined( USE_PACKED_NORMALMAP )\n\t\tmapN = vec3( mapN.xy, sqrt( saturate( 1.0 - dot( mapN.xy, mapN.xy ) ) ) );\n\t#endif\n\tmapN.xy *= normalScale;\n\tnormal = normalize( tbn * mapN );\n#elif defined( USE_BUMPMAP )\n\tnormal = perturbNormalArb( - vViewPosition, normal, dHdxy_fwd(), faceDirection );\n#endif";
 
@@ -60395,7 +60423,7 @@ var normal_pars_fragment = "#ifndef FLAT_SHADED\n\tvarying vec3 vNormal;\n\t#ifd
 
 var normal_pars_vertex = "#ifndef FLAT_SHADED\n\tvarying vec3 vNormal;\n\t#ifdef USE_TANGENT\n\t\tvarying vec3 vTangent;\n\t\tvarying vec3 vBitangent;\n\t#endif\n#endif";
 
-var normal_vertex = "#ifndef FLAT_SHADED\n\tvNormal = normalize( transformedNormal );\n\t#ifdef USE_TANGENT\n\t\tvTangent = normalize( transformedTangent );\n\t\tvBitangent = normalize( cross( vNormal, vTangent ) * tangent.w );\n\t#endif\n#endif";
+var normal_vertex = "#ifndef FLAT_SHADED\n\tvNormal = normalize( transformedNormal );\n\t#ifdef USE_TANGENT\n\t\tvTangent = normalize( transformedTangent );\n\t\tvBitangent = normalize( cross( vNormal, vTangent ) * tangent.w );\n\t\t#ifdef FLIP_SIDED\n\t\t\tvBitangent = - vBitangent;\n\t\t#endif\n\t#endif\n#endif";
 
 var normalmap_pars_fragment = "#ifdef USE_NORMALMAP\n\tuniform sampler2D normalMap;\n\tuniform vec2 normalScale;\n#endif\n#ifdef USE_NORMALMAP_OBJECTSPACE\n\tuniform mat3 normalMatrix;\n#endif\n#if ! defined ( USE_TANGENT ) && ( defined ( USE_NORMALMAP_TANGENTSPACE ) || defined ( USE_CLEARCOAT_NORMALMAP ) || defined( USE_ANISOTROPY ) )\n\tmat3 getTangentFrame( vec3 eye_pos, vec3 surf_norm, vec2 uv ) {\n\t\tvec3 q0 = dFdx( eye_pos.xyz );\n\t\tvec3 q1 = dFdy( eye_pos.xyz );\n\t\tvec2 st0 = dFdx( uv.st );\n\t\tvec2 st1 = dFdy( uv.st );\n\t\tvec3 N = surf_norm;\n\t\tvec3 q1perp = cross( q1, N );\n\t\tvec3 q0perp = cross( N, q0 );\n\t\tvec3 T = q1perp * st0.x + q0perp * st1.x;\n\t\tvec3 B = q1perp * st0.y + q0perp * st1.y;\n\t\tfloat det = max( dot( T, T ), dot( B, B ) );\n\t\tfloat scale = ( det == 0.0 ) ? 0.0 : inversesqrt( det );\n\t\treturn mat3( T * scale, B * scale, N );\n\t}\n#endif";
 
@@ -67030,9 +67058,10 @@ function WebGLProgram( renderer, cacheKey, parameters, bindingStates ) {
 
 		gl.bindAttribLocation( program, 0, parameters.index0AttributeName );
 
-	} else if ( parameters.morphTargets === true ) {
+	} else if ( parameters.hasPositionAttribute === true ) {
 
-		// programs with morphTargets displace position out of attribute 0
+		// below avoids the "Attribute 0 is disabled" performance penalty
+
 		gl.bindAttribLocation( program, 0, 'position' );
 
 	}
@@ -67222,13 +67251,7 @@ class WebGLShaderCache {
 
 	}
 
-	update( material ) {
-
-		const vertexShader = material.vertexShader;
-		const fragmentShader = material.fragmentShader;
-
-		const vertexShaderStage = this._getShaderStage( vertexShader );
-		const fragmentShaderStage = this._getShaderStage( fragmentShader );
+	update( material, vertexShaderStage, fragmentShaderStage ) {
 
 		const materialShaders = this._getShaderCacheForMaterial( material );
 
@@ -67268,15 +67291,15 @@ class WebGLShaderCache {
 
 	}
 
-	getVertexShaderID( material ) {
+	getVertexShaderStage( material ) {
 
-		return this._getShaderStage( material.vertexShader ).id;
+		return this._getShaderStage( material.vertexShader );
 
 	}
 
-	getFragmentShaderID( material ) {
+	getFragmentShaderStage( material ) {
 
-		return this._getShaderStage( material.fragmentShader ).id;
+		return this._getShaderStage( material.fragmentShader );
 
 	}
 
@@ -67435,10 +67458,13 @@ function WebGLPrograms( renderer, environments, extensions, capabilities, bindin
 			vertexShader = material.vertexShader;
 			fragmentShader = material.fragmentShader;
 
-			_customShaders.update( material );
+			const vertexShaderStage = _customShaders.getVertexShaderStage( material );
+			const fragmentShaderStage = _customShaders.getFragmentShaderStage( material );
 
-			customVertexShaderID = _customShaders.getVertexShaderID( material );
-			customFragmentShaderID = _customShaders.getFragmentShaderID( material );
+			_customShaders.update( material, vertexShaderStage, fragmentShaderStage );
+
+			customVertexShaderID = vertexShaderStage.id;
+			customFragmentShaderID = fragmentShaderStage.id;
 
 		}
 
@@ -67453,7 +67479,7 @@ function WebGLPrograms( renderer, environments, extensions, capabilities, bindin
 		const HAS_ENVMAP = !! envMap;
 		const HAS_AOMAP = !! material.aoMap;
 		const HAS_LIGHTMAP = !! material.lightMap;
-		const HAS_BUMPMAP = !! material.bumpMap;
+		const HAS_BUMPMAP = !! material.bumpMap && material.wireframe === false;
 		const HAS_NORMALMAP = !! material.normalMap;
 		const HAS_DISPLACEMENTMAP = !! material.displacementMap;
 		const HAS_EMISSIVEMAP = !! material.emissiveMap;
@@ -67650,6 +67676,8 @@ function WebGLPrograms( renderer, environments, extensions, capabilities, bindin
 			reversedDepthBuffer: reversedDepthBuffer,
 
 			skinning: object.isSkinnedMesh === true,
+
+			hasPositionAttribute: geometry.attributes.position !== undefined,
 
 			morphTargets: geometry.morphAttributes.position !== undefined,
 			morphNormals: geometry.morphAttributes.normal !== undefined,
@@ -67912,6 +67940,8 @@ function WebGLPrograms( renderer, environments, extensions, capabilities, bindin
 			_programLayers.enable( 21 );
 		if ( parameters.numLightProbeGrids > 0 )
 			_programLayers.enable( 22 );
+		if ( parameters.hasPositionAttribute )
+			_programLayers.enable( 23 );
 
 		array.push( _programLayers.mask );
 
@@ -72247,12 +72277,25 @@ function WebGLTextures( _gl, extensions, state, properties, capabilities, utils,
 
 					}
 
-					const level = 0;
-					const internalFormat = _gl.RGBA;
-					const srcFormat = _gl.RGBA;
-					const srcType = _gl.UNSIGNED_BYTE;
+					if ( _gl.texElementImage2D.length === 3 ) {
 
-					_gl.texElementImage2D( _gl.TEXTURE_2D, level, internalFormat, srcFormat, srcType, image );
+						// Chrome 150+
+
+						_gl.texElementImage2D( _gl.TEXTURE_2D, _gl.RGBA8, image );
+
+					} else {
+
+						// Chrome 138 - 149
+
+						const level = 0;
+						const internalFormat = _gl.RGBA;
+						const srcFormat = _gl.RGBA;
+						const srcType = _gl.UNSIGNED_BYTE;
+
+						_gl.texElementImage2D( _gl.TEXTURE_2D, level, internalFormat, srcFormat, srcType, image );
+
+					}
+
 					_gl.texParameteri( _gl.TEXTURE_2D, _gl.TEXTURE_MIN_FILTER, _gl.LINEAR );
 					_gl.texParameteri( _gl.TEXTURE_2D, _gl.TEXTURE_WRAP_S, _gl.CLAMP_TO_EDGE );
 					_gl.texParameteri( _gl.TEXTURE_2D, _gl.TEXTURE_WRAP_T, _gl.CLAMP_TO_EDGE );
@@ -77113,7 +77156,7 @@ class WebGLRenderer {
 
 			if ( scene === null ) scene = _emptyScene; // renderBufferDirect second parameter used to be fog (could be null)
 
-			const frontFaceCW = ( object.isMesh && object.matrixWorld.determinant() < 0 );
+			const frontFaceCW = ( object.isMesh && object.matrixWorld.determinantAffine() < 0 );
 
 			const program = setProgram( camera, scene, geometry, material, object );
 
