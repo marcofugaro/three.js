@@ -194,7 +194,7 @@
 				// route it through the reproject / denoise chain ( so AO is never filtered twice ):
 				//   'none' → raw, un-accumulated AO
 				//   'TemporalReprojectNode' → reproject stage only ( history validation, no real averaging )
-				//   'RecurrentDenoise + TemporalReprojectNode' → full chain: reproject + spatial/temporal denoise
+				//   'TemporalReprojectNode + RecurrentDenoise' → full chain: reproject + spatial/temporal denoise
 				applyAODenoiser = () => {
 
 					const mode = params.aoDenoiser;
@@ -203,7 +203,7 @@
 
 					// Reproject config per mode: standalone self-accumulation for 'TemporalReprojectNode',
 					// or accumulate:false fed by ( and feeding back from ) the denoiser for the full chain.
-					if ( mode === 'RecurrentDenoise + TemporalReprojectNode' ) {
+					if ( mode === 'TemporalReprojectNode + RecurrentDenoise' ) {
 
 						aoReproject.accumulate = false;
 						aoReproject.setHistoryTexture( aoDenoise );
@@ -215,7 +215,7 @@
 
 					}
 
-					const aoNode = mode === 'RecurrentDenoise + TemporalReprojectNode' ? aoDenoise
+					const aoNode = mode === 'TemporalReprojectNode + RecurrentDenoise' ? aoDenoise
 						: mode === 'TemporalReprojectNode' ? aoReproject
 							: aoPass;
 					const aoOutput = aoNode.getTextureNode().sample( screenUV ).r;
