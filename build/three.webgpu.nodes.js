@@ -13725,13 +13725,38 @@ class UniformArrayNode extends BufferNode {
 
 	}
 
-	/**
-	 * The update makes sure to correctly transfer the data from the (complex) objects
-	 * in the array to the internal, correctly padded value buffer.
-	 *
-	 * @param {NodeFrame} frame - A reference to the current node frame.
-	 */
 	update( /*frame*/ ) {
+
+		this.updateBuffer();
+
+	}
+
+	/**
+	 * Composes a user-defined update with the buffer transfer.
+	 *
+	 * @param {Function} callback - The update function.
+	 * @param {string} updateType - The update type.
+	 * @return {UniformArrayNode} A reference to this node.
+	 */
+	onUpdate( callback, updateType ) {
+
+		callback = callback.bind( this );
+
+		return super.onUpdate( ( frame, self ) => {
+
+			callback( frame, self );
+
+			this.updateBuffer();
+
+		}, updateType );
+
+	}
+
+	/**
+	 * The method makes sure to correctly transfer the data from the (complex) objects
+	 * in the array to the internal, correctly padded value buffer.
+	 */
+	updateBuffer() {
 
 		const { array, value } = this;
 
@@ -13854,7 +13879,7 @@ class UniformArrayNode extends BufferNode {
 		this.bufferCount = length;
 		this.bufferType = paddedType;
 
-		this.update(); // initialize the buffer values
+		this.updateBuffer(); // initialize the buffer values
 
 		return super.setup( builder );
 
@@ -18736,8 +18761,10 @@ function getSkinnedNormalAndTangent( boneMatrices, normal, tangent, bindMatrix, 
 
 	skinMatrix = bindMatrixInverse.mul( skinMatrix ).mul( bindMatrix );
 
-	const skinNormal = skinMatrix.transformDirection( normal ).xyz;
-	const skinTangent = skinMatrix.transformDirection( tangent ).xyz;
+	const skinMatrix3 = mat3( skinMatrix );
+
+	const skinNormal = skinMatrix3.mul( normal );
+	const skinTangent = skinMatrix3.mul( tangent );
 
 	return { skinNormal, skinTangent };
 
@@ -31242,8 +31269,9 @@ class Geometries extends DataMap {
 
 			this.info.memory.geometries --;
 
+			// index
+
 			const index = geometry.index;
-			const geometryAttributes = renderObject.getAttributes();
 
 			if ( index !== null ) {
 
@@ -31251,11 +31279,15 @@ class Geometries extends DataMap {
 
 			}
 
-			for ( const geometryAttribute of geometryAttributes ) {
+			// geometry attributes
 
-				this.attributes.delete( geometryAttribute );
+			for ( const attribute of Object.values( geometry.attributes ) ) {
+
+				this.attributes.delete( attribute );
 
 			}
+
+			// wireframe attributes
 
 			const wireframeAttribute = this.wireframes.get( geometry );
 
@@ -31264,6 +31296,22 @@ class Geometries extends DataMap {
 				this.attributes.delete( wireframeAttribute );
 
 			}
+
+			// node attributes (TODO: Remove this bit once we support BufferAttribute.dispose())
+
+			const currentAttributes = new Set( Object.values( renderObject.geometry.attributes ) );
+
+			for ( const attribute of renderObject.getAttributes() ) {
+
+				if ( currentAttributes.has( attribute ) === false ) {
+
+					this.attributes.delete( attribute );
+
+				}
+
+			}
+
+			//
 
 			geometry.removeEventListener( 'dispose', onDispose );
 
@@ -32929,6 +32977,9 @@ class Bindings extends DataMap {
 
 						}
 
+						const textureData = this.textures.get( binding.texture );
+						if ( textureData.bindGroups !== undefined ) textureData.bindGroups.delete( bindGroup );
+
 						binding.release();
 
 					}
@@ -33309,6 +33360,14 @@ class RenderList {
 		this.occlusionQueryCount = 0;
 
 		/**
+		 * The ID of the frame the render list was last used in.
+		 *
+		 * @type {number}
+		 * @default -1
+		 */
+		this.frameId = -1;
+
+		/**
 		 * The last object that was counted for occlusion query testing. Used to
 		 * avoid counting an object more than once when it produces multiple render
 		 * items (e.g. a mesh with multiple material groups), since such an object
@@ -33416,6 +33475,10 @@ class RenderList {
 	 */
 	push( object, geometry, material, groupOrder, z, group, clippingContext ) {
 
+		// with a reversed depth buffer the projected z is inverted
+
+		if ( this.camera.reversedDepth === true ) z = - z;
+
 		const renderItem = this.getNextRenderItem( object, geometry, material, groupOrder, z, group, clippingContext );
 
 		if ( object.occlusionTest === true && this._lastOcclusionObject !== object ) {
@@ -33500,21 +33563,12 @@ class RenderList {
 	 *
 	 * @param {?function(any, any): number} customOpaqueSort - A custom sort function for opaque objects.
 	 * @param {?function(any, any): number} customTransparentSort -  A custom sort function for transparent objects.
-	 * @param {boolean} reversedDepth - Whether a reversed depth buffer is used or not.
 	 */
-	sort( customOpaqueSort, customTransparentSort, reversedDepth ) {
+	sort( customOpaqueSort, customTransparentSort ) {
 
 		if ( this.opaque.length > 1 ) this.opaque.sort( customOpaqueSort || painterSortStable );
 		if ( this.transparentDoublePass.length > 1 ) this.transparentDoublePass.sort( customTransparentSort || reversePainterSortStable );
 		if ( this.transparent.length > 1 ) this.transparent.sort( customTransparentSort || reversePainterSortStable );
-
-		if ( reversedDepth ) {
-
-			this.opaque.reverse();
-			this.transparentDoublePass.reverse();
-			this.transparent.reverse();
-
-		}
 
 	}
 
@@ -33536,21 +33590,52 @@ class RenderList {
 
 			if ( renderItem.id === null ) break;
 
-			renderItem.id = null;
-			renderItem.object = null;
-			renderItem.geometry = null;
-			renderItem.material = null;
-			renderItem.groupOrder = null;
-			renderItem.renderOrder = null;
-			renderItem.z = null;
-			renderItem.group = null;
-			renderItem.clippingContext = null;
+			resetRenderItem( renderItem );
 
 		}
 
 		this._lastOcclusionObject = null;
 
 	}
+
+	/**
+	 * This method is called when the render list has become inactive.
+	 */
+	clear() {
+
+		// Clear all references from the render items so scene objects
+		// are not retained when the render list is not used anymore.
+
+		for ( let i = 0, il = this.renderItems.length; i < il; i ++ ) {
+
+			const renderItem = this.renderItems[ i ];
+
+			if ( renderItem.id === null ) break;
+
+			resetRenderItem( renderItem );
+
+		}
+
+		this.opaque.length = 0;
+		this.transparentDoublePass.length = 0;
+		this.transparent.length = 0;
+		this.bundles.length = 0;
+
+	}
+
+}
+
+function resetRenderItem( renderItem ) {
+
+	renderItem.id = null;
+	renderItem.object = null;
+	renderItem.geometry = null;
+	renderItem.material = null;
+	renderItem.groupOrder = null;
+	renderItem.renderOrder = null;
+	renderItem.z = null;
+	renderItem.group = null;
+	renderItem.clippingContext = null;
 
 }
 
@@ -33585,6 +33670,23 @@ class RenderLists {
 		 */
 		this.lists = new ChainMap();
 
+		/**
+		 * The render lists which are currently in use. Lists are removed
+		 * as soon as they become stale.
+		 *
+		 * @private
+		 * @type {Set<RenderList>}
+		 */
+		this._activeLists = new Set();
+
+		/**
+		 * The current frame ID.
+		 *
+		 * @private
+		 * @type {number}
+		 */
+		this._frameId = -1;
+
 	}
 
 	/**
@@ -33613,7 +33715,40 @@ class RenderLists {
 		_chainKeys$2[ 0 ] = null;
 		_chainKeys$2[ 1 ] = null;
 
+		//
+
+		list.frameId = this._frameId;
+		this._activeLists.add( list );
+
 		return list;
+
+	}
+
+	/**
+	 * Must be called when a new frame begins.
+	 *
+	 * @param {number} frameId - The current frame ID.
+	 */
+	update( frameId ) {
+
+		if ( frameId === this._frameId ) return;
+
+		this._frameId = frameId;
+
+		for ( const list of this._activeLists ) {
+
+			// if a render list has not been used within 10 frames, consider
+			// it as inactive and clear it
+
+			if ( frameId - list.frameId > 10 ) {
+
+				list.clear();
+
+				this._activeLists.delete( list );
+
+			}
+
+		}
 
 	}
 
@@ -33623,6 +33758,9 @@ class RenderLists {
 	dispose() {
 
 		this.lists = new ChainMap();
+
+		this._activeLists.clear();
+		this._frameId = -1;
 
 	}
 
@@ -33856,6 +33994,14 @@ class RenderContext {
 		 * @default null
 		 */
 		this.camera = null;
+
+		/**
+		 * Whether a fullscreen pass is rendered or not.
+		 *
+		 * @type {boolean}
+		 * @default false
+		 */
+		this.fullscreenPass = false;
 
 		/**
 		 * This flag can be used for type testing.
@@ -45568,19 +45714,23 @@ class ShadowNode extends ShadowBaseNode {
 	 */
 	updateBefore( frame ) {
 
+		// do not render shadow maps during precompilation
+
+		if ( frame.renderer._isPreCompiling === true ) return;
+
 		const { shadow } = this;
 
 		let needsUpdate = shadow.needsUpdate || shadow.autoUpdate;
 
 		if ( needsUpdate ) {
 
-			if ( this._cameraFrameId[ frame.camera ] === frame.frameId ) {
+			if ( this._cameraFrameId.get( frame.camera ) === frame.frameId ) {
 
 				needsUpdate = false;
 
 			}
 
-			this._cameraFrameId[ frame.camera ] = frame.frameId;
+			this._cameraFrameId.set( frame.camera, frame.frameId );
 
 		}
 
@@ -59536,7 +59686,7 @@ class Renderer {
 		 * @type {number}
 		 * @default 0
 		 */
-		this._samples = samples || ( antialias === true ) ? 4 : 0;
+		this._samples = samples || ( antialias === true ? 4 : 0 );
 
 		/**
 		 * OnCanvasTargetResize callback function.
@@ -59926,6 +60076,16 @@ class Renderer {
 		this._compilationPromises = null;
 
 		/**
+		 * Whether the renderer is currently precompiling a render object in
+		 * `compileAsync()`.
+		 *
+		 * @private
+		 * @type {boolean}
+		 * @default false
+		 */
+		this._isPreCompiling = false;
+
+		/**
 		 * When an override material is in use, this property points to the current
 		 * source material during the rendering of a render object.
 		 *
@@ -60215,16 +60375,15 @@ class Renderer {
 
 		//
 
-		const frustum = camera.isArrayCamera ? _frustumArray : _frustum;
+		_projScreenMatrix.multiplyMatrices( camera.projectionMatrix, camera.matrixWorldInverse );
 
 		if ( camera.isArrayCamera ) {
 
-			frustum.setFromArrayCamera( camera );
+			_frustumArray.setFromArrayCamera( camera );
 
 		} else {
 
-			_projScreenMatrix.multiplyMatrices( camera.projectionMatrix, camera.matrixWorldInverse );
-			frustum.setFromProjectionMatrix( _projScreenMatrix, camera.coordinateSystem, camera.reversedDepth );
+			_frustum.setFromProjectionMatrix( _projScreenMatrix, camera.coordinateSystem, camera.reversedDepth );
 
 		}
 
@@ -60312,10 +60471,12 @@ class Renderer {
 			// Use async node building to yield to main thread
 			await this._nodes.getForRenderAsync( renderObject );
 
+			this._isPreCompiling = true; // note: no awaits are allowed when this flag is true otherwise the state leaks outside of this method
 			this._nodes.updateBefore( renderObject );
 			this._geometries.updateForRender( renderObject );
 			this._nodes.updateForRender( renderObject );
 			this._bindings.updateForRender( renderObject );
+			this._isPreCompiling = false;
 
 			// Wait for pipeline creation
 			const pipelinePromises = [];
@@ -60326,7 +60487,9 @@ class Renderer {
 
 			}
 
+			this._isPreCompiling = true;
 			this._nodes.updateAfter( renderObject );
+			this._isPreCompiling = false;
 
 			// Yield between objects to allow animation frames
 			await yieldToMain();
@@ -60925,18 +61088,19 @@ class Renderer {
 
 		//
 
-		const frustum = camera.isArrayCamera ? _frustumArray : _frustum;
+		_projScreenMatrix.multiplyMatrices( camera.projectionMatrix, camera.matrixWorldInverse );
 
 		if ( camera.isArrayCamera ) {
 
-			frustum.setFromArrayCamera( camera );
+			_frustumArray.setFromArrayCamera( camera );
 
 		} else {
 
-			_projScreenMatrix.multiplyMatrices( camera.projectionMatrix, camera.matrixWorldInverse );
-			frustum.setFromProjectionMatrix( _projScreenMatrix, camera.coordinateSystem, camera.reversedDepth );
+			_frustum.setFromProjectionMatrix( _projScreenMatrix, camera.coordinateSystem, camera.reversedDepth );
 
 		}
+
+		this._renderLists.update( nodeFrame.frameId );
 
 		const renderList = this._renderLists.get( scene, camera );
 		renderList.begin();
@@ -60947,7 +61111,7 @@ class Renderer {
 
 		if ( this.sortObjects === true ) {
 
-			renderList.sort( this._opaqueSort, this._transparentSort, camera.reversedDepth );
+			renderList.sort( this._opaqueSort, this._transparentSort );
 
 		}
 
@@ -60983,6 +61147,7 @@ class Renderer {
 		renderContext.activeCubeFace = activeCubeFace;
 		renderContext.activeMipmapLevel = activeMipmapLevel;
 		renderContext.occlusionQueryCount = renderList.occlusionQueryCount;
+		renderContext.fullscreenPass = scene.isQuadMesh === true;
 
 		//
 
@@ -61753,8 +61918,8 @@ class Renderer {
 	 * The current number of samples used for multi-sample anti-aliasing (MSAA).
 	 *
 	 * When rendering to a custom render target, the number of samples of that render target is used.
-	 * If the renderer needs an internal framebuffer target for tone mapping or color space conversion,
-	 * the number of samples is set to 0.
+	 * The number of samples is set to 0 when the renderer needs an internal framebuffer target for
+	 * tone mapping or color space conversion, or when rendering a fullscreen quad to screen.
 	 *
 	 * @type {number}
 	 */
@@ -61766,7 +61931,7 @@ class Renderer {
 
 			samples = this._renderTarget.samples;
 
-		} else if ( this.needsFrameBufferTarget ) {
+		} else if ( this.needsFrameBufferTarget || this._currentRenderContext?.fullscreenPass === true ) {
 
 			samples = 0;
 
@@ -71885,6 +72050,12 @@ class WebGLBackend extends Backend {
 			renderContextData.occlusionQueryObjects = new Array( occlusionQueryCount );
 			renderContextData.occlusionQueryIndex = 0;
 
+		} else if ( renderContextData.lastOcclusionObject !== undefined ) {
+
+			// invalidate if there is a stale query
+
+			renderContextData.lastOcclusionObject = undefined;
+
 		}
 
 	}
@@ -71907,7 +72078,9 @@ class WebGLBackend extends Backend {
 
 		if ( occlusionQueryCount > 0 ) {
 
-			if ( occlusionQueryCount > renderContextData.occlusionQueryIndex ) {
+			const lastOcclusionObject = renderContextData.lastOcclusionObject;
+
+			if ( lastOcclusionObject && lastOcclusionObject.occlusionTest === true ) {
 
 				gl.endQuery( gl.ANY_SAMPLES_PASSED );
 
@@ -71996,14 +72169,14 @@ class WebGLBackend extends Backend {
 
 			const check = () => {
 
-				let completed = 0;
+				let completed = true;
 
 				// check all queries and requeue as appropriate
 				for ( let i = 0; i < currentOcclusionQueries.length; i ++ ) {
 
 					const query = currentOcclusionQueries[ i ];
 
-					if ( query === null ) continue;
+					if ( ! query ) continue;
 
 					if ( gl.getQueryParameter( query, gl.QUERY_RESULT_AVAILABLE ) ) {
 
@@ -72012,13 +72185,15 @@ class WebGLBackend extends Backend {
 						currentOcclusionQueries[ i ] = null;
 						gl.deleteQuery( query );
 
-						completed ++;
+					} else {
+
+						completed = false;
 
 					}
 
 				}
 
-				if ( completed < currentOcclusionQueries.length ) {
+				if ( completed === false ) {
 
 					requestAnimationFrame( check );
 
@@ -74234,7 +74409,9 @@ const GPUCompareFunction = {
 };
 
 const GPUStoreOp = {
-	Store: 'store'};
+	Store: 'store',
+	Discard: 'discard'
+};
 
 const GPULoadOp = {
 	Load: 'load',
@@ -84892,6 +85069,15 @@ class WebGPUBackend extends Backend {
 
 			renderContextData.lastOcclusionObject = null;
 
+		} else if ( renderContextData.lastOcclusionObject !== undefined ) {
+
+			// invalidate if there is a stale query
+
+			renderContextData.lastOcclusionObject = undefined;
+
+			renderContextData.occlusionQuerySet.destroy();
+			renderContextData.occlusionQuerySet = undefined;
+
 		}
 
 		let descriptor;
@@ -84970,6 +85156,8 @@ class WebGPUBackend extends Backend {
 
 		//
 
+		const renderTarget = renderContext.renderTarget;
+
 		if ( renderContext.depth ) {
 
 			if ( renderContext.clearDepth ) {
@@ -84983,7 +85171,15 @@ class WebGPUBackend extends Backend {
 
 			}
 
-			depthStencilAttachment.depthStoreOp = GPUStoreOp.Store;
+			if ( renderContext.sampleCount > 1 && renderTarget?.resolveDepthBuffer === false ) {
+
+				depthStencilAttachment.depthStoreOp = GPUStoreOp.Discard;
+
+			} else {
+
+				depthStencilAttachment.depthStoreOp = GPUStoreOp.Store;
+
+			}
 
 		}
 
@@ -85000,7 +85196,15 @@ class WebGPUBackend extends Backend {
 
 			}
 
-			depthStencilAttachment.stencilStoreOp = GPUStoreOp.Store;
+			if ( renderContext.sampleCount > 1 && renderTarget?.resolveStencilBuffer === false ) {
+
+				depthStencilAttachment.stencilStoreOp = GPUStoreOp.Discard;
+
+			} else {
+
+				depthStencilAttachment.stencilStoreOp = GPUStoreOp.Store;
+
+			}
 
 		}
 
@@ -85247,7 +85451,9 @@ class WebGPUBackend extends Backend {
 
 		}
 
-		if ( occlusionQueryCount > renderContextData.occlusionQueryIndex ) {
+		const lastOcclusionObject = renderContextData.lastOcclusionObject;
+
+		if ( lastOcclusionObject && lastOcclusionObject.occlusionTest === true ) {
 
 			renderContextData.currentPass.endOcclusionQuery();
 
@@ -85416,9 +85622,11 @@ class WebGPUBackend extends Backend {
 
 			for ( let i = 0; i < currentOcclusionQueryObjects.length; i ++ ) {
 
-				if ( results[ i ] === BigInt( 0 ) ) {
+				const object = currentOcclusionQueryObjects[ i ];
 
-					occluded.add( currentOcclusionQueryObjects[ i ] );
+				if ( object !== undefined && results[ i ] === BigInt( 0 ) ) {
+
+					occluded.add( object );
 
 				}
 

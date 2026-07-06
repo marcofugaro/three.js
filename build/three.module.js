@@ -8230,7 +8230,11 @@ function WebGLRenderList() {
 
 	}
 
-	function push( object, geometry, material, groupOrder, z, group ) {
+	function push( object, geometry, material, groupOrder, z, group, camera ) {
+
+		// with a reversed depth buffer the projected z is inverted
+
+		if ( camera.reversedDepth === true ) z = - z;
 
 		const renderItem = getNextRenderItem( object, geometry, material, groupOrder, z, group );
 
@@ -8270,19 +8274,11 @@ function WebGLRenderList() {
 
 	}
 
-	function sort( customOpaqueSort, customTransparentSort, reversedDepth ) {
+	function sort( customOpaqueSort, customTransparentSort ) {
 
 		if ( opaque.length > 1 ) opaque.sort( customOpaqueSort || painterSortStable );
 		if ( transmissive.length > 1 ) transmissive.sort( customTransparentSort || reversePainterSortStable );
 		if ( transparent.length > 1 ) transparent.sort( customTransparentSort || reversePainterSortStable );
-
-		if ( reversedDepth ) {
-
-			opaque.reverse();
-			transmissive.reverse();
-			transparent.reverse();
-
-		}
 
 	}
 
@@ -17686,7 +17682,7 @@ class WebGLRenderer {
 
 			if ( _this.sortObjects === true ) {
 
-				currentRenderList.sort( _opaqueSort, _transparentSort, camera.reversedDepth );
+				currentRenderList.sort( _opaqueSort, _transparentSort );
 
 			}
 
@@ -17876,7 +17872,7 @@ class WebGLRenderer {
 
 						if ( material.visible ) {
 
-							currentRenderList.push( object, geometry, material, groupOrder, _vector4.z, null );
+							currentRenderList.push( object, geometry, material, groupOrder, _vector4.z, null, camera );
 
 						}
 
@@ -17920,7 +17916,7 @@ class WebGLRenderer {
 
 								if ( groupMaterial && groupMaterial.visible ) {
 
-									currentRenderList.push( object, geometry, groupMaterial, groupOrder, _vector4.z, group );
+									currentRenderList.push( object, geometry, groupMaterial, groupOrder, _vector4.z, group, camera );
 
 								}
 
@@ -17928,7 +17924,7 @@ class WebGLRenderer {
 
 						} else if ( material.visible ) {
 
-							currentRenderList.push( object, geometry, material, groupOrder, _vector4.z, null );
+							currentRenderList.push( object, geometry, material, groupOrder, _vector4.z, null, camera );
 
 						}
 
